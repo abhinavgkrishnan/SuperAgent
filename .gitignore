@@ -1,0 +1,8 @@
+node_modules
+dist
+.env.local
+.DS_Store
+vite.config.ts.*
+*.tar.gz
+__pycache__
+.env
