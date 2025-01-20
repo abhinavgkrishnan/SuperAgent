@@ -3,17 +3,18 @@ from typing import Dict, Any, List, Generator, Optional
 import os
 import logging
 import requests
+import json
 
 logger = logging.getLogger(__name__)
 
 class SerperAgent(BaseAgent):
     """Agent responsible for handling all Serper API interactions"""
-    
+
     def __init__(self):
         super().__init__()
         self._register_search_tools()
         logger.info("SerperAgent initialized with search capabilities")
-    
+
     def _register_search_tools(self):
         """Register search-specific tools"""
         self.register_tool(
@@ -22,7 +23,7 @@ class SerperAgent(BaseAgent):
             method=self._search_scholar,
             parameters={"query": "Academic search query"}
         )
-        
+
         self.register_tool(
             name="general_search",
             description="Search general information using Serper API",
@@ -88,8 +89,10 @@ class SerperAgent(BaseAgent):
 
     def generate(self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None) -> Generator[str, None, None]:
         """
-        SerperAgent doesn't generate content, it only provides search functionality.
-        This method is implemented to satisfy the abstract base class.
+        SerperAgent doesn't generate content directly, it only provides search functionality.
+        This method yields empty results to satisfy the abstract base class.
         """
-        if False:
-            yield ""
+        yield json.dumps({
+            'type': 'search',
+            'content': 'Search agent does not generate content'
+        })

@@ -21,6 +21,7 @@ class BaseAgent(ABC):
         self.api_key = "eDsBy2D9vSFWtXZBEAHTPqrvMm7BJqTe2LJ4BhsUHVECir28rKq6dPLK2k7sScQb"
         self.temperature = temperature
         self.tools: Dict[str, Tool] = {}
+        self.confidence_score: float = 0.5  # Initialize confidence score
         self._register_default_tools()
         logger.info(f"Initialized {self.__class__.__name__} with temperature {temperature}")
 
@@ -132,5 +133,5 @@ class BaseAgent(ABC):
 
     @abstractmethod
     def generate(self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None) -> Generator[str, None, None]:
-        """Generate content based on the prompt and search results"""
+        """Generate content based on the prompt"""
         pass
