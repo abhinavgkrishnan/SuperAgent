@@ -142,15 +142,6 @@ class SuperAgent(BaseAgent):
             if self.search_agent:
                 supporting_agents.append(self.search_agent)
 
-        # Add data analysis agent for analytical tasks
-        if any(
-            keyword in task.lower()
-            for keyword in ["analyze", "compare", "statistics", "data"]
-        ):
-            data_agent = self.specialized_agents.get("data_analysis")
-            if data_agent:
-                supporting_agents.append(data_agent)
-
         return [primary_agent] + supporting_agents
 
     async def _process_task_with_agent(
@@ -303,13 +294,6 @@ class SuperAgent(BaseAgent):
                         - Academic or research-heavy subjects
                         - Topics needing multiple sections or chapters
                         - Subjects requiring citations and references
-
-                        For Data Analysis format (return "data_analysis"):
-                        - Pure statistical analysis requests
-                        - Data visualization needs
-                        - Pattern recognition in datasets
-                        - General trend analysis without financial context
-                        - Scientific data interpretation
 
                         For Financial Report format (return "financial"):
                         - Financial analysis and reporting

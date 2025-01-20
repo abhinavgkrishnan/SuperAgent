@@ -5,7 +5,6 @@ from models import db, GeneratedContent
 from agents.thesis_agent import ThesisAgent
 from agents.twitter_agent import TwitterAgent
 from agents.serper_agent import SerperAgent
-from agents.data_analysis_agent import DataAnalysisAgent
 from agents.financial_agent import FinancialReportAgent
 from agents.product_description_agent import ProductDescriptionAgent
 from agents.super_agent import SuperAgent
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 serper_agent = SerperAgent()
 thesis_agent = ThesisAgent()
 twitter_agent = TwitterAgent()
-data_analysis_agent = DataAnalysisAgent()
 financial_agent = FinancialReportAgent()
 product_description_agent = ProductDescriptionAgent()
 
@@ -24,7 +22,6 @@ product_description_agent = ProductDescriptionAgent()
 specialized_agents = {
     'thesis': thesis_agent,
     'twitter': twitter_agent,
-    'data_analysis': data_analysis_agent,
     'financial': financial_agent,
     'product': product_description_agent
 }
