@@ -328,7 +328,7 @@ class SuperAgent(BaseAgent):
                                 "criticism": "Potential drawbacks of this choice",
                                 "speak": "Brief explanation for user"
                             },
-                            "content_type": "thesis|twitter|data_analysis|financial|product",
+                            "content_type": "thesis|twitter|financial|product",
                             "confidence": float
                         }"""
                     },
