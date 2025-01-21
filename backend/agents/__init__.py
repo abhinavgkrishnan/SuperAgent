@@ -12,7 +12,7 @@ from .financial_agent import FinancialReportAgent
 from .product_description_agent import ProductDescriptionAgent
 
 __version__ = "1.0.0"
-__author__ = "AI Content Generator Team"
+__author__ = "gk"
 
 # Export all agent classes for easier imports
 __all__ = [

@@ -47,15 +47,40 @@ class SuperAgent(BaseAgent):
         self._register_orchestrator_tools()
         logger.info("SuperAgent initialized with enhanced orchestration capabilities")
 
-    def get_agent_for_type(self, content_type: str) -> BaseAgent:
-        """Get the appropriate agent for the content type with fallback"""
+    def generate(
+        self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None
+    ) -> Generator[str, None, None]:
+        """
+        SuperAgent's generate method for orchestrating multiple agents and tasks.
+        """
+        event_loop = None
         try:
-            return self.specialized_agents.get(
-                content_type, self.specialized_agents["thesis"]
-            )
+            # Create event loop for async execution
+            event_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(event_loop)
+
+            # Execute tasks and get result
+            result = event_loop.run_until_complete(self.execute_tasks(prompt))
+
+            if result:
+                yield json.dumps({"type": "super_agent", "content": result})
+            else:
+                yield json.dumps(
+                    {
+                        "type": "error",
+                        "content": "Task execution failed to produce results",
+                    }
+                )
+
         except Exception as e:
-            logger.error(f"Error getting agent for type {content_type}: {str(e)}")
-            return self.specialized_agents["thesis"]  # Fallback to thesis agent
+            logger.error(f"Error in SuperAgent generate: {str(e)}")
+            yield json.dumps({"type": "error", "content": str(e)})
+        finally:
+            if event_loop:
+                try:
+                    event_loop.close()
+                except:
+                    pass
 
     async def execute_tasks(self, task: str) -> Any:
         """Iterate through agents in a chain until final output is generated."""
@@ -143,6 +168,16 @@ class SuperAgent(BaseAgent):
                 supporting_agents.append(self.search_agent)
 
         return [primary_agent] + supporting_agents
+
+    def get_agent_for_type(self, content_type: str) -> BaseAgent:
+        """Get the appropriate agent for the content type with fallback"""
+        try:
+            return self.specialized_agents.get(
+                content_type, self.specialized_agents["thesis"]
+            )
+        except Exception as e:
+            logger.error(f"Error getting agent for type {content_type}: {str(e)}")
+            return self.specialized_agents["thesis"]  # Fallback to thesis agent
 
     async def _process_task_with_agent(
         self, agent: BaseAgent, task: str
@@ -252,107 +287,6 @@ class SuperAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error retrieving memories: {str(e)}")
             return []
-
-    def determine_content_type(self, prompt: str) -> str:
-            """Determine the most appropriate content type for the given prompt"""
-            try:
-                # Get relevant past decisions
-                past_decisions = self._get_relevant_memories(prompt)
-
-                # First, analyze task complexity with autonomous capabilities
-                complexity = self._analyze_task_complexity(prompt)
-                logger.info(f"Task complexity analysis: {complexity}")
-                self._update_memory({"type": "analysis", "content": complexity})
-
-                # Include past decisions in the context
-                decision_history = "\n".join([
-                    f"Past decision: {m['type']}: {m['content']}"
-                    for m in past_decisions if m['type'] == 'decision'
-                ])
-
-                # Create execution plan autonomously
-                plan = self._create_execution_plan(prompt, complexity)
-                logger.info(f"Execution plan: {plan}")
-                self._update_memory({"type": "plan", "content": plan})
-
-                # Enhanced decision making for content type
-                messages = [
-                    {
-                        "role": "system",
-                        "content": """You are an autonomous decision-making agent.
-                        Analyze the prompt and determine the most appropriate content format
-                        based on these criteria:
-
-                        For Twitter format (return "twitter"):
-                        - Short, concise topics that can be expressed in a few sentences
-                        - News, announcements, or quick updates
-                        - Personal experiences or opinions
-                        - Content that benefits from hashtags and viral sharing
-
-                        For Thesis format (return "thesis"):
-                        - Complex topics requiring detailed explanation
-                        - Academic or research-heavy subjects
-                        - Topics needing multiple sections or chapters
-                        - Subjects requiring citations and references
-
-                        For Financial Report format (return "financial"):
-                        - Financial analysis and reporting
-                        - Market research and trends
-                        - Cryptocurrency and digital asset analysis
-                        - Investment analysis and recommendations
-                        - Economic insights and forecasts
-                        - Price trends and market behavior
-                        - Trading patterns and market indicators
-                        - Asset valuation and performance metrics
-
-                        For Product Description format (return "product"):
-                        - Product features and specifications
-                        - Marketing copy and product positioning
-                        - Technical product documentation
-                        - Product comparisons and reviews
-
-                        Consider:
-                        1. Topic complexity and scope
-                        2. Required detail level
-                        3. Target audience expectations
-                        4. Information density needed
-                        5. Best format for engagement
-                        6. Primary focus (financial vs purely statistical)
-
-                        Return your decision in JSON format:
-                        {
-                            "thoughts": {
-                                "text": "Content type decision",
-                                "reasoning": "Detailed explanation of why this format fits best",
-                                "plan": ["- How to proceed with this format"],
-                                "criticism": "Potential drawbacks of this choice",
-                                "speak": "Brief explanation for user"
-                            },
-                            "content_type": "thesis|twitter|financial|product",
-                            "confidence": float
-                        }"""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}"
-                    }
-                ]
-
-                response = self._call_api(messages, stream=False)
-                result = response.json()['choices'][0]['message']['content']
-                # Properly parse the JSON string from the content
-                result = json.loads(result)
-
-                content_type = result.get("content_type", "thesis").lower()
-                logger.info(f"Content type decision: {content_type}, confidence: {result.get('confidence', 0.5)}")
-
-                valid_types = ['thesis', 'twitter', 'data_analysis', 'financial', 'product']
-                return content_type if content_type in valid_types else 'thesis'
-
-            except Exception as e:
-                logger.error(f"Content type determination error: {str(e)}")
-                logger.error(f"Full error context: {traceback.format_exc()}")  # Add more detailed error logging
-                return 'thesis'
 
     def _update_memory(self, entry: Dict[str, Any]):
         """Update agent's memory in database"""
@@ -525,37 +459,109 @@ class SuperAgent(BaseAgent):
             (old_avg * (n - 1)) + confidence
         ) / n
 
-    def generate(
-        self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None
-    ) -> Generator[str, None, None]:
-        """
-        SuperAgent's generate method now supports the enhanced task execution system
-        """
-        event_loop = None
+    def determine_content_type(self, prompt: str) -> str:
+        """Determine the most appropriate content type for the given prompt"""
         try:
-            # Create event loop for async execution
-            event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(event_loop)
+            # Get relevant past decisions
+            past_decisions = self._get_relevant_memories(prompt)
 
-            # Execute tasks and get result
-            result = event_loop.run_until_complete(self.execute_tasks(prompt))
+            # First, analyze task complexity with autonomous capabilities
+            complexity = self._analyze_task_complexity(prompt)
+            logger.info(f"Task complexity analysis: {complexity}")
+            self._update_memory({"type": "analysis", "content": complexity})
 
-            if result:
-                yield json.dumps({"type": "super_agent", "content": result})
-            else:
-                yield json.dumps(
-                    {
-                        "type": "error",
-                        "content": "Task execution failed to produce results",
-                    }
-                )
+            # Include past decisions in the context
+            decision_history = "\n".join(
+                [
+                    f"Past decision: {m['type']}: {m['content']}"
+                    for m in past_decisions
+                    if m["type"] == "decision"
+                ]
+            )
+
+            # Create execution plan autonomously
+            plan = self._create_execution_plan(prompt, complexity)
+            logger.info(f"Execution plan: {plan}")
+            self._update_memory({"type": "plan", "content": plan})
+
+            # Enhanced decision making for content type
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are an autonomous decision-making agent.
+                        Analyze the prompt and determine the most appropriate content format
+                        based on these criteria:
+
+                        For Twitter format (return "twitter"):
+                        - Short, concise topics that can be expressed in a few sentences
+                        - News, announcements, or quick updates
+                        - Personal experiences or opinions
+                        - Content that benefits from hashtags and viral sharing
+
+                        For Thesis format (return "thesis"):
+                        - Complex topics requiring detailed explanation
+                        - Academic or research-heavy subjects
+                        - Topics needing multiple sections or chapters
+                        - Subjects requiring citations and references
+
+                        For Financial Report format (return "financial"):
+                        - Financial analysis and reporting
+                        - Market research and trends
+                        - Cryptocurrency and digital asset analysis
+                        - Investment analysis and recommendations
+                        - Economic insights and forecasts
+                        - Price trends and market behavior
+                        - Trading patterns and market indicators
+                        - Asset valuation and performance metrics
+
+                        For Product Description format (return "product"):
+                        - Product features and specifications
+                        - Marketing copy and product positioning
+                        - Technical product documentation
+                        - Product comparisons and reviews
+
+                        Consider:
+                        1. Topic complexity and scope
+                        2. Required detail level
+                        3. Target audience expectations
+                        4. Information density needed
+                        5. Best format for engagement
+                        6. Primary focus (financial vs purely statistical)
+                        Return your decision in JSON format:
+                        {
+                            "thoughts": {
+                                "text": "Content type decision",
+                                "reasoning": "Detailed explanation of why this format fits best",
+                                "plan": ["- How to proceed with this format"],
+                                "criticism": "Potential drawbacks of this choice",
+                                "speak": "Brief explanation for user"
+                            },
+                            "content_type": "thesis|twitter|financial|product",
+                            "confidence": float
+                        }""",
+                },
+                {
+                    "role": "user",
+                    "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}",
+                },
+            ]
+
+            response = self._call_api(messages, stream=False)
+            result = response.json()["choices"][0]["message"]["content"]
+            # Properly parse the JSON string from the content
+            result = json.loads(result)
+
+            content_type = result.get("content_type", "thesis").lower()
+            logger.info(
+                f"Content type decision: {content_type}, confidence: {result.get('confidence', 0.5)}"
+            )
+
+            valid_types = ["thesis", "twitter", "data_analysis", "financial", "product"]
+            return content_type if content_type in valid_types else "thesis"
 
         except Exception as e:
-            logger.error(f"Error in SuperAgent generate: {str(e)}")
-            yield json.dumps({"type": "error", "content": str(e)})
-        finally:
-            if event_loop:
-                try:
-                    event_loop.close()
-                except:
-                    pass
+            logger.error(f"Content type determination error: {str(e)}")
+            logger.error(
+                f"Full error context: {traceback.format_exc()}"
+            )  # Add more detailed error logging
+            return "thesis"
