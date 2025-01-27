@@ -6,6 +6,17 @@ import json
 logger = logging.getLogger(__name__)
 
 class FinancialReportAgent(BaseAgent):
+    AGENT_DESCRIPTION = """
+        Specialized in financial analysis and reporting. Best suited for:
+        - Financial statements and reports
+        - Market analysis and trends
+        - Investment recommendations
+        - Economic forecasts
+        - Stock market analysis
+        - Cryptocurrency market analysis
+        - Risk assessments
+        - Portfolio performance reviews
+        """
     def __init__(self):
         super().__init__(temperature=0.2)  # Lower temperature for more precise financial outputs
         self._register_financial_tools()
@@ -89,7 +100,7 @@ class FinancialReportAgent(BaseAgent):
                     f"Source {i+1}:\n{result.get('snippet', '')}"
                     for i, result in enumerate(search_results[:3])
                 ])
-    
+
             messages = [
                 {
                     "role": "system",
@@ -99,7 +110,7 @@ class FinancialReportAgent(BaseAgent):
                     3. Performance Metrics
                     4. Trend Analysis
                     5. Recommendations
-    
+
                     Use formal business language and include specific metrics."""
                 },
                 {
@@ -107,7 +118,7 @@ class FinancialReportAgent(BaseAgent):
                     "content": f"Generate report for prompt: {prompt}\n\nContext:\n{context}"
                 }
             ]
-    
+
             response = self._call_api(messages, stream=True)
             for line in response.iter_lines():
                 if line:
@@ -130,7 +141,7 @@ class FinancialReportAgent(BaseAgent):
                             logger.error(f"Error parsing response: {str(e)}")
                             logger.error(f"Response line causing error: {content}")
                             continue
-    
+
         except Exception as e:
             logger.error(f"Report generation error: {str(e)}")
             yield json.dumps({

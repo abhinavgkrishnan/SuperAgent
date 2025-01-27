@@ -6,6 +6,17 @@ import json
 logger = logging.getLogger(__name__)
 
 class ThesisAgent(BaseAgent):
+    AGENT_DESCRIPTION = """
+        Specialized in creating long-form academic and research content. Best suited for:
+        - Complex academic topics requiring detailed analysis
+        - Research papers and scholarly articles
+        - Literature reviews and systematic analyses
+        - Technical documentation and white papers
+        - In-depth explanatory content
+        - Topics requiring citations and references
+        - Multi-section structured documents
+        - Comprehensive study analyses
+        """
     def __init__(self):
         super().__init__()
         self._register_thesis_tools()

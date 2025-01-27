@@ -8,6 +8,7 @@ from agents.serper_agent import SerperAgent
 from agents.financial_agent import FinancialReportAgent
 from agents.product_description_agent import ProductDescriptionAgent
 from agents.super_agent import SuperAgent
+from agents.fallback_agent import FallbackAgent
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,15 @@ thesis_agent = ThesisAgent()
 twitter_agent = TwitterAgent()
 financial_agent = FinancialReportAgent()
 product_description_agent = ProductDescriptionAgent()
+fallback_agent = FallbackAgent()
 
 # Initialize SuperAgent with specialized agents
 specialized_agents = {
     'thesis': thesis_agent,
     'twitter': twitter_agent,
     'financial': financial_agent,
-    'product': product_description_agent
+    'product': product_description_agent,
+    'fallback': fallback_agent
 }
 super_agent = SuperAgent(search_agent=serper_agent, specialized_agents=specialized_agents)
 

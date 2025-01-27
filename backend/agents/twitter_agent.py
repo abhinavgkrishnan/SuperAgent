@@ -6,6 +6,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TwitterAgent(BaseAgent):
+    AGENT_DESCRIPTION = """
+        Specialized in creating engaging social media content. Best suited for:
+        - Short-form, impactful messages
+        - Viral marketing content
+        - Social media threads and discussions
+        - Breaking news and updates
+        - Quick tips and insights
+        - Trending topics
+        - Hashtag-optimized content
+        - Community engagement posts
+        """
     def __init__(self):
         super().__init__()
         logger.info("TwitterAgent initialized")

@@ -6,6 +6,17 @@ import json
 logger = logging.getLogger(__name__)
 
 class ProductDescriptionAgent(BaseAgent):
+    AGENT_DESCRIPTION = """
+        Specialized in creating compelling product content. Best suited for:
+        - Product descriptions and features
+        - Technical specifications
+        - Marketing copy and sales content
+        - Product comparisons
+        - User manuals and guides
+        - Feature highlights
+        - Benefits analysis
+        - E-commerce listings
+        """
     def __init__(self):
         super().__init__(temperature=0.7)  # Higher temperature for creative descriptions
         self._register_description_tools()
