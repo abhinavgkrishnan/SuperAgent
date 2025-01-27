@@ -208,7 +208,7 @@ export function ContentGeneratorApp() {
                 placeholder="What would you like me to write about?"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyPress}
                 className="flex-1 bg-gray-700/50 border-gray-600 focus:ring-blue-500 focus:border-blue-500 rounded-full py-2 px-4"
                 disabled={isGenerating}
               />

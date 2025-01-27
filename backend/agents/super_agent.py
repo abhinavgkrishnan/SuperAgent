@@ -464,104 +464,125 @@ class SuperAgent(BaseAgent):
         try:
             # Get relevant past decisions
             past_decisions = self._get_relevant_memories(prompt)
-
+    
             # First, analyze task complexity with autonomous capabilities
             complexity = self._analyze_task_complexity(prompt)
             logger.info(f"Task complexity analysis: {complexity}")
             self._update_memory({"type": "analysis", "content": complexity})
-
+    
             # Include past decisions in the context
-            decision_history = "\n".join(
-                [
-                    f"Past decision: {m['type']}: {m['content']}"
-                    for m in past_decisions
-                    if m["type"] == "decision"
-                ]
-            )
-
+            decision_history = "\n".join([
+                f"Past decision: {m['type']}: {m['content']}"
+                for m in past_decisions if m['type'] == 'decision'
+            ])
+    
             # Create execution plan autonomously
             plan = self._create_execution_plan(prompt, complexity)
             logger.info(f"Execution plan: {plan}")
             self._update_memory({"type": "plan", "content": plan})
-
+    
             # Enhanced decision making for content type
             messages = [
                 {
                     "role": "system",
                     "content": """You are an autonomous decision-making agent.
-                        Analyze the prompt and determine the most appropriate content format
-                        based on these criteria:
-
-                        For Twitter format (return "twitter"):
-                        - Short, concise topics that can be expressed in a few sentences
-                        - News, announcements, or quick updates
-                        - Personal experiences or opinions
-                        - Content that benefits from hashtags and viral sharing
-
-                        For Thesis format (return "thesis"):
-                        - Complex topics requiring detailed explanation
-                        - Academic or research-heavy subjects
-                        - Topics needing multiple sections or chapters
-                        - Subjects requiring citations and references
-
-                        For Financial Report format (return "financial"):
-                        - Financial analysis and reporting
-                        - Market research and trends
-                        - Cryptocurrency and digital asset analysis
-                        - Investment analysis and recommendations
-                        - Economic insights and forecasts
-                        - Price trends and market behavior
-                        - Trading patterns and market indicators
-                        - Asset valuation and performance metrics
-
-                        For Product Description format (return "product"):
-                        - Product features and specifications
-                        - Marketing copy and product positioning
-                        - Technical product documentation
-                        - Product comparisons and reviews
-
-                        Consider:
-                        1. Topic complexity and scope
-                        2. Required detail level
-                        3. Target audience expectations
-                        4. Information density needed
-                        5. Best format for engagement
-                        6. Primary focus (financial vs purely statistical)
-                        Return your decision in JSON format:
-                        {
-                            "thoughts": {
-                                "text": "Content type decision",
-                                "reasoning": "Detailed explanation of why this format fits best",
-                                "plan": ["- How to proceed with this format"],
-                                "criticism": "Potential drawbacks of this choice",
-                                "speak": "Brief explanation for user"
-                            },
-                            "content_type": "thesis|twitter|financial|product",
-                            "confidence": float
-                        }""",
+                    Analyze the prompt and determine the most appropriate content format
+                    based on these criteria:
+    
+                    For Twitter format (return "twitter"):
+                    - Short, concise topics that can be expressed in a few sentences
+                    - News, announcements, or quick updates
+                    - Personal experiences or opinions
+                    - Content that benefits from hashtags and viral sharing
+    
+                    For Thesis format (return "thesis"):
+                    - Complex topics requiring detailed explanation
+                    - Academic or research-heavy subjects
+                    - Topics needing multiple sections or chapters
+                    - Subjects requiring citations and references
+    
+                    For Financial Report format (return "financial"):
+                    - Financial analysis and reporting
+                    - Market research and trends
+                    - Cryptocurrency and digital asset analysis
+                    - Investment analysis and recommendations
+                    - Economic insights and forecasts
+                    - Price trends and market behavior
+                    - Trading patterns and market indicators
+                    - Asset valuation and performance metrics
+    
+                    For Product Description format (return "product"):
+                    - Product features and specifications
+                    - Marketing copy and product positioning
+                    - Technical product documentation
+                    - Product comparisons and reviews
+    
+                    Consider:
+                    1. Topic complexity and scope
+                    2. Required detail level
+                    3. Target audience expectations
+                    4. Information density needed
+                    5. Best format for engagement
+                    6. Primary focus (financial vs purely statistical)
+    
+                    Return your decision in JSON format:
+                    {
+                        "thoughts": {
+                            "text": "Content type decision",
+                            "reasoning": "Detailed explanation of why this format fits best",
+                            "plan": ["- How to proceed with this format"],
+                            "criticism": "Potential drawbacks of this choice",
+                            "speak": "Brief explanation for user"
+                        },
+                        "content_type": "thesis|twitter|data_analysis|financial|product",
+                        "confidence": float
+                    }"""
                 },
                 {
                     "role": "user",
-                    "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}",
-                },
+                    "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}"
+                }
             ]
-
+    
             response = self._call_api(messages, stream=False)
-            result = response.json()["choices"][0]["message"]["content"]
-            # Properly parse the JSON string from the content
-            result = json.loads(result)
-
-            content_type = result.get("content_type", "thesis").lower()
-            logger.info(
-                f"Content type decision: {content_type}, confidence: {result.get('confidence', 0.5)}"
-            )
-
-            valid_types = ["thesis", "twitter", "data_analysis", "financial", "product"]
-            return content_type if content_type in valid_types else "thesis"
-
+            
+            # Extract the content from the response
+            try:
+                if hasattr(response, 'json'):
+                    result = response.json()
+                    if isinstance(result, dict) and 'choices' in result:
+                        content = result['choices'][0]['message']['content']
+                        # Try to parse the content as JSON
+                        try:
+                            parsed_result = json.loads(content)
+                            content_type = parsed_result.get("content_type", "thesis").lower()
+                        except json.JSONDecodeError:
+                            # If JSON parsing fails, try to extract content_type using regex
+                            match = re.search(r'"content_type":\s*"([^"]+)"', content)
+                            content_type = match.group(1).lower() if match else "thesis"
+                    else:
+                        content_type = "thesis"
+                else:
+                    # Handle case where response is text
+                    response_text = str(response)
+                    try:
+                        parsed_result = json.loads(response_text)
+                        content_type = parsed_result.get("content_type", "thesis").lower()
+                    except json.JSONDecodeError:
+                        # If JSON parsing fails, try to extract content_type using regex
+                        match = re.search(r'"content_type":\s*"([^"]+)"', response_text)
+                        content_type = match.group(1).lower() if match else "thesis"
+                        
+            except Exception as parse_error:
+                logger.error(f"Error parsing response: {parse_error}")
+                content_type = "thesis"
+    
+            logger.info(f"Content type decision: {content_type}")
+            
+            valid_types = ['thesis', 'twitter', 'data_analysis', 'financial', 'product']
+            return content_type if content_type in valid_types else 'thesis'
+    
         except Exception as e:
             logger.error(f"Content type determination error: {str(e)}")
-            logger.error(
-                f"Full error context: {traceback.format_exc()}"
-            )  # Add more detailed error logging
-            return "thesis"
+            logger.error(f"Full error context: {traceback.format_exc()}")
+            return 'thesis'
