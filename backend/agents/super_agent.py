@@ -7,6 +7,7 @@ from datetime import datetime
 from models import db, AgentMemory
 import re
 import traceback
+from .shared_tools import ToolRegistry
 
 # Clear any existing log handlers to prevent duplicate logging issues
 for handler in logging.root.handlers[:]:
@@ -17,13 +18,11 @@ log_file = "super_agent.log"
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Capture all logs (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s",
     handlers=[
-        logging.FileHandler(
-            log_file, mode="w"
-        ),  # 'w' ensures the file is overwritten for fresh logs
-        logging.StreamHandler(),  # Also print logs to the console
+        logging.FileHandler(log_file, mode="w"),
+        logging.StreamHandler(),
     ],
 )
 
@@ -33,10 +32,11 @@ logger.info("Logging system initialized successfully")
 
 class SuperAgent(BaseAgent):
     def __init__(self, search_agent=None, specialized_agents=None):
-        # Use lower temperature for more precise decision-making
         super().__init__(temperature=0.3)
-        self.memory: List[Dict[str, Any]] = []
-        self.performance_metrics: Dict[str, Any] = {
+        self.memory = []
+        self.tools_used = []  # Initialize at class level
+        self.execution_path = []  # Initialize at class level
+        self.performance_metrics = {
             "decisions_made": 0,
             "successful_executions": 0,
             "tool_usage": {},
@@ -44,130 +44,217 @@ class SuperAgent(BaseAgent):
         }
         self.search_agent = search_agent
         self.specialized_agents = specialized_agents or {}
-        self._register_orchestrator_tools()
+        self.tool_registry = ToolRegistry()
+        self._register_all_agent_tools()
         logger.info("SuperAgent initialized with enhanced orchestration capabilities")
 
-    def generate(
-        self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None
-    ) -> Generator[str, None, None]:
-        """
-        SuperAgent's generate method for orchestrating multiple agents and tasks.
-        """
-        event_loop = None
-        try:
-            # Create event loop for async execution
-            event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(event_loop)
-
-            # Execute tasks and get result
-            result = event_loop.run_until_complete(self.execute_tasks(prompt))
-
-            if result:
-                yield json.dumps({"type": "super_agent", "content": result})
-            else:
-                yield json.dumps(
-                    {
-                        "type": "error",
-                        "content": "Task execution failed to produce results",
-                    }
+    def _register_all_agent_tools(self):
+        """Register tools from all specialized agents"""
+        for agent_type, agent in self.specialized_agents.items():
+            agent_tools = agent.get_available_tools()
+            for tool_id, tool_info in agent_tools.items():
+                self.tool_registry.register_tool(
+                    name=tool_id,
+                    description=tool_info["description"],
+                    method=agent.tools[tool_id].method,
+                    parameters=tool_info["parameters"],
+                    agent_type=agent.agent_type,
                 )
 
-        except Exception as e:
-            logger.error(f"Error in SuperAgent generate: {str(e)}")
-            yield json.dumps({"type": "error", "content": str(e)})
-        finally:
-            if event_loop:
-                try:
-                    event_loop.close()
-                except:
-                    pass
-
-    async def execute_tasks(self, task: str) -> Any:
-        """Iterate through agents in a chain until final output is generated."""
-        task_queue = [{"task": task, "status": "pending", "attempts": 0}]
-        final_answer = None
-        primary_agent: Optional[BaseAgent] = None
-
-        logger.info(f"Starting task execution: {task}")
-
-        while task_queue:
-            current_task = task_queue.pop(0)
-            logger.debug(f"Processing task: {current_task}")
-
-            if current_task["attempts"] >= 3:
-                logger.warning(f"Task exceeded retry limit: {current_task['task']}")
-                continue
-
+    def _execute_tool_sequence(self, tool_sequence: List[Dict[str, Any]], content_type: str) -> Generator[str, None, None]:
+        accumulated_result = None
+        step_outputs = {}
+    
+        for step_index, step in enumerate(tool_sequence, 1):
             try:
-                primary_agent = self.get_agent_for_type(
-                    self.determine_content_type(current_task["task"])
-                )
-                if primary_agent is None:
-                    raise ValueError("Failed to get a valid agent for task")
+                tool_id = step.get('tool_id')
+                if not tool_id:
+                    logger.warning("No tool_id in step")
+                    continue
+    
+                # Get the tool
+                tool = self.tool_registry.get_tool(tool_id)
+                if tool is None:
+                    logger.error(f"Tool {tool_id} not found in registry")
+                    continue
+    
+                # Prepare parameters
+                params = step.get('parameters', {}).copy()
+    
+                # Replace step references
+                for param_name, param_value in params.items():
+                    if isinstance(param_value, str) and '$STEP[' in param_value:
+                        ref_step = re.search(r'\$STEP\[(\d+)\]', param_value)
+                        if ref_step:
+                            step_num = int(ref_step.group(1))
+                            if step_num in step_outputs:
+                                params[param_name] = step_outputs[step_num]
+    
+                # Add input_data if supported
+                if 'input_data' in tool.parameters:
+                    params['input_data'] = accumulated_result if accumulated_result else None
+    
+                # Track execution
+                self.tools_used.append({
+                    "tool_id": tool_id,
+                    "parameters": params,
+                    "step": step_index
+                })
+    
+                # Execute tool
+                result = tool.method(**params)
+                
+                # Clean any standardized response wrappers
+                if isinstance(result, dict):
+                    if 'status' in result and 'data' in result:
+                        result = result['data'].get('message', result['data'])
+                    elif 'message' in result and 'possible_interpretations' in result:
+                        result = result['message']
+    
+                # Store result
+                step_outputs[step_index] = result
+                accumulated_result = result
+    
+                # Only yield final step results
+                if step_index == len(tool_sequence):
+                    # Return clean content
+                    output = {
+                        'type': content_type,
+                        'content': result if isinstance(result, str) else json.dumps(result, indent=2)
+                    }
+                    yield json.dumps(output)
+    
+            except Exception as step_error:
+                error_msg = f"Error in step {step_index}: {str(step_error)}"
+                logger.error(error_msg)
+                yield json.dumps({
+                    'type': content_type,
+                    'error': error_msg,
+                    'step': step_index
+                })
 
-                supporting_agents = self.assign_agents(current_task["task"])
-                logger.info(
-                    f"Primary agent assigned: {primary_agent.__class__.__name__}"
-                )
-                logger.info(
-                    f"Supporting agents assigned: {[agent.__class__.__name__ for agent in supporting_agents]}"
-                )
+    def generate(self, prompt: str, max_retries: int = 3) -> Generator[str, None, None]:
+        for attempt in range(max_retries):
+            try:
+                # Reset tracking
+                self.tools_used = []
+                self.execution_path = []
 
-                # Step 1: Primary Agent Processes Task
-                response = await self._process_task_with_agent(
-                    primary_agent, current_task["task"]
-                )
-                intermediate_result = response.get("result", "")
+                # Determine content type
+                content_type = self.determine_content_type(prompt)
+                logger.info(f"Content type determined: {content_type}")
 
-                logger.info(
-                    f"Primary agent completed task with status: {response.get('status')}"
-                )
-                logger.debug(f"Intermediate result: {intermediate_result}")
+                if content_type == "fallback":
+                    yield from self.specialized_agents["fallback"].generate(prompt)
+                    return
 
-                # Step 2: Pass Intermediate Results to Supporting Agents
-                for agent in supporting_agents:
-                    response = await self._process_task_with_agent(
-                        agent, intermediate_result
-                    )
-                    intermediate_result += "\n\n" + response.get("result", "")
-                    logger.info(
-                        f"Supporting agent {agent.__class__.__name__} completed processing."
-                    )
+                # Get tool sequence
+                tool_sequence = self._get_tool_sequence(prompt, content_type)
+                if not tool_sequence:
+                    logger.warning("Empty tool sequence received")
+                    yield from self.specialized_agents["fallback"].generate(prompt)
+                    return
 
-                if response.get("status") == "completed":
-                    final_answer = intermediate_result
-                    self._update_agent_performance(primary_agent, success=True)
-                    logger.info(f"Task execution completed successfully.")
-                else:
-                    logger.error(f"Unexpected task status: {response.get('status')}")
-                    self._update_agent_performance(primary_agent, success=False)
+                logger.info(f"Planned tool sequence: {tool_sequence}")
+
+                # Execute tool sequence
+                yield from self._execute_tool_sequence(tool_sequence, content_type)
+                return
 
             except Exception as e:
-                logger.error(f"Task execution error: {str(e)}")
-                current_task["attempts"] += 1
-                if current_task["attempts"] < 3:
-                    task_queue.append(current_task)
+                logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:  # Last attempt
+                    yield from self.specialized_agents["fallback"].generate(prompt)
+                continue
 
-                if primary_agent:
-                    self._handle_agent_failure(current_task["task"], primary_agent)
+    def _get_tool_sequence(self, task: str, content_type: str) -> List[Dict[str, Any]]:
+        """Get sequence of tools to execute"""
+        try:
+            # Convert tools to serializable format
+            tools_info = {}
+            for tool_id, tool in self.tool_registry.get_all_tools().items():
+                tools_info[tool_id] = {
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    "agent_type": tool.agent_type,
+                }
+    
+            messages = [
+                {
+                    "role": "system",
+                    "content": f"""Plan the tool sequence for a {content_type} task.
+                    IMPORTANT: Consider if current information from web searches would improve accuracy.
+                    Example uses for search:
+                    - Technical specs: Get latest product information
+                    - Thesis content: Find current research and papers
+                    - Market content: Get recent trends and data
+                    
+                    For each tool, consider:
+                    1. Would current web data improve the output?
+                    2. Are facts available that should be verified?
+                    3. Could recent examples help?
+                    
+                    Available tools: {json.dumps(tools_info, indent=2)}
+            
+                    When creating the sequence:
+                    1. Consider if searches would improve the output
+                    2. Think about what specific information would be most valuable
+                    3. Plan how to use the search results in later steps
+                    4. Consider multiple searches if different types of information are needed
+            
+                    Return a JSON array like this:
+                    [
+                        {{
+                            "tool_id": "exact_tool_id",
+                            "reason": "why this tool is needed",
+                            "parameters": {{
+                                "param1": "value1"
+                            }},
+                            "expected_output": "what this step produces"
+                        }}
+                    ]"""
+                },
+                {"role": "user", "content": f"Task: {task}"}
+            ]
+    
+            response = self._call_api(messages, stream=False)
+            content = response.json()['choices'][0]['message']['content']
+            matches = re.findall(r'\[.*?\]', content, re.DOTALL)
+            if matches:
+                try:
+                    sequence = json.loads(matches[0])
+                    # Verify sequence is a list of dictionaries
+                    if isinstance(sequence, list) and all(isinstance(step, dict) for step in sequence):
+                        return sequence
+                    logger.error(f"Invalid sequence format: {sequence}")
+                    return []
+                except json.JSONDecodeError as e:
+                    # Log the malformed JSON for debugging
+                    logger.error(f"Malformed JSON: {matches[0]}")
+                    logger.error(f"JSON error: {str(e)}")
+                    # Attempt to fix common JSON issues
+                    try:
+                        fixed_json = matches[0].replace('\n', '').replace('  ', ' ')
+                        sequence = json.loads(fixed_json)
+                        if isinstance(sequence, list) and all(isinstance(step, dict) for step in sequence):
+                            return sequence
+                    except Exception as fix_error:
+                        logger.error(f"Failed to fix JSON: {str(fix_error)}")
+                    return []
+            return []  # Return empty list if no matches found
+    
+        except Exception as e:
+            logger.error(f"Error getting tool sequence: {str(e)}")
+            logger.error(f"Full error context: {traceback.format_exc()}")
+            return []  # Return empty list on any error
 
-        logger.info(f"Final result for task: {final_answer}")
-        return final_answer
+    def get_tools_used(self) -> List[str]:
+        """Get list of tools used in last execution"""
+        return self.tools_used
 
-    def assign_agents(self, task: str) -> List[BaseAgent]:
-        """Determine which agents should handle different aspects of the task."""
-        primary_agent = self.get_agent_for_type(self.determine_content_type(task))
-        supporting_agents = []
-
-        # Add search agent if research is needed
-        if any(
-            keyword in task.lower()
-            for keyword in ["research", "analyze", "find", "search"]
-        ):
-            if self.search_agent:
-                supporting_agents.append(self.search_agent)
-
-        return [primary_agent] + supporting_agents
+    def get_execution_path(self) -> List[Dict[str, Any]]:
+        """Get detailed execution path of last run"""
+        return self.execution_path
 
     def get_agent_for_type(self, content_type: str) -> BaseAgent:
         """Get the appropriate agent for the content type with fallback"""
@@ -177,76 +264,54 @@ class SuperAgent(BaseAgent):
             )
         except Exception as e:
             logger.error(f"Error getting agent for type {content_type}: {str(e)}")
-            return self.specialized_agents["thesis"]  # Fallback to thesis agent
+            return self.specialized_agents["thesis"]
 
-    async def _process_task_with_agent(
-        self, agent: BaseAgent, task: str
-    ) -> Dict[str, Any]:
-        """Process a single task with an agent"""
+    def _analyze_task_complexity(self, task: str) -> Dict[str, Any]:
+        """Enhanced task complexity analysis with self-improvement capability"""
         try:
-            # Convert the generator to async
-            response = ""
-            async for chunk in self._agent_generate(agent, task):
-                response += chunk
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are an autonomous task analyzer.
+                        Consider these aspects while maintaining independence in decision-making:
+                        1. Information Density: How much data processing is needed?
+                        2. Research Depth: What level of investigation is required?
+                        3. Technical Complexity: What specialized knowledge is needed?
+                        4. Tool Requirements: What tools might be needed?
+                        5. Previous Performance: How have similar tasks been handled?
 
-            return {"status": "completed", "result": response}
-        except Exception as e:
-            logger.error(f"Agent processing error: {str(e)}")
-            return {"status": "error", "error": str(e)}
-
-    async def _agent_generate(self, agent: BaseAgent, task: str):
-        """Wrapper to make agent.generate async"""
-        for chunk in agent.generate(task):
-            yield chunk
-
-    def _handle_agent_failure(self, task: str, failed_agent: BaseAgent):
-        """Handle agent failures with fallback mechanisms"""
-        logger.warning(
-            f"Agent {failed_agent.__class__.__name__} failed, attempting recovery for task: {task}"
-        )
-
-        try:
-            fallback_agent = self.specialized_agents.get("thesis")
-            if fallback_agent and fallback_agent != failed_agent:
-                logger.info(f"Attempting fallback with thesis agent")
-                return fallback_agent.generate(task)
-
-            if self.search_agent and self.search_agent != failed_agent:
-                logger.info(f"Attempting fallback with search agent")
-                search_results = self.search_agent.search(task)
-                if search_results:
-                    return json.dumps(
+                        Return a structured JSON analysis matching this format:
                         {
-                            "type": "fallback",
-                            "content": f"Based on search results: {json.dumps(search_results[:2])}",
-                        }
-                    )
+                            "complexity_score": float (0-1),
+                            "required_tools": ["tool1", "tool2"],
+                            "confidence": float (0-1)
+                        }""",
+                },
+                {"role": "user", "content": f"Analyze this task autonomously: {task}"},
+            ]
 
-            logger.error("All fallback mechanisms failed")
-            return json.dumps(
-                {
-                    "type": "error",
-                    "content": "Unable to process task after multiple attempts",
-                }
-            )
+            response = self._call_api(messages, stream=False)
+            response_text = response.text
+            logger.debug(f"Task analysis response: {response_text}")
+
+            try:
+                result = json.loads(response_text)
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in task analysis: {str(e)}")
+                return {"error": "Invalid JSON response"}
 
         except Exception as e:
-            logger.error(f"Error in fallback handling: {str(e)}")
-            return json.dumps(
-                {
-                    "type": "error",
-                    "content": f"Critical error in fallback handling: {str(e)}",
-                }
-            )
+            logger.error(f"Task analysis error: {str(e)}")
+            return {"error": str(e)}
 
     def _update_agent_performance(self, agent: BaseAgent, success: bool):
         """Update agent performance metrics"""
         try:
             agent_type = agent.__class__.__name__
             if not hasattr(agent, "confidence_score"):
-                agent.confidence_score = 0.5  # Initialize if not exists
+                agent.confidence_score = 0.5
 
-            # Update confidence score
             if success:
                 agent.confidence_score = min(1.0, agent.confidence_score + 0.05)
                 logger.info(
@@ -258,7 +323,6 @@ class SuperAgent(BaseAgent):
                     f"Agent {agent_type} failed. Confidence decreased to {agent.confidence_score:.2f}"
                 )
 
-            # Store performance metrics
             memory_entry = AgentMemory(
                 type="performance",
                 content={
@@ -308,7 +372,6 @@ class SuperAgent(BaseAgent):
             db.session.commit()
             logger.info(f"Memory entry added: {entry['type']}")
 
-            # Clean up old entries keeping only last 100
             old_entries = (
                 AgentMemory.query.order_by(AgentMemory.timestamp.desc())
                 .offset(100)
@@ -321,129 +384,6 @@ class SuperAgent(BaseAgent):
 
         except Exception as e:
             logger.error(f"Error updating memory: {str(e)}")
-            # Continue execution even if memory update fails
-            pass
-
-    def _register_orchestrator_tools(self):
-        """Register orchestrator-specific tools"""
-        self.register_tool(
-            name="analyze_task",
-            description="Analyze task complexity and requirements",
-            method=self._analyze_task_complexity,
-            parameters={"task": "Task description"},
-        )
-
-        self.register_tool(
-            name="search_and_analyze",
-            description="Search for information and analyze findings",
-            method=self._search_and_analyze,
-            parameters={
-                "query": "Search query",
-                "analysis_type": "Type of analysis needed",
-            },
-        )
-
-    def _analyze_task_complexity(self, task: str) -> Dict[str, Any]:
-        """Enhanced task complexity analysis with self-improvement capability"""
-        try:
-            messages = [
-                {
-                    "role": "system",
-                    "content": """You are an autonomous task analyzer.
-                        Consider these aspects while maintaining independence in decision-making:
-                        1. Information Density: How much data processing is needed?
-                        2. Research Depth: What level of investigation is required?
-                        3. Technical Complexity: What specialized knowledge is needed?
-                        4. Tool Requirements: What tools might be needed?
-                        5. Previous Performance: How have similar tasks been handled?
-
-                        Return a structured JSON analysis matching this format:
-                        {
-                            "complexity_score": float (0-1),
-                            "required_tools": ["tool1", "tool2"],
-                            "confidence": float (0-1)
-                        }""",
-                },
-                {"role": "user", "content": f"Analyze this task autonomously: {task}"},
-            ]
-
-            response = self._call_api(messages, stream=False)
-            response_text = response.text
-            logger.debug(f"Task analysis response: {response_text}")
-
-            # Attempt to parse the JSON response
-            try:
-                result = json.loads(response_text)
-                return result
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error in task analysis: {str(e)}")
-                return {"error": "Invalid JSON response"}
-
-        except Exception as e:
-            logger.error(f"Task analysis error: {str(e)}")
-            return {"error": str(e)}
-
-    def _search_and_analyze(
-        self, query: str, analysis_type: str
-    ) -> List[Dict[str, Any]]:
-        """Integrated search and analysis capabilities using SerperAgent"""
-        try:
-            # Use SerperAgent for search if available
-            if self.search_agent:
-                search_type = "scholar" if analysis_type == "academic" else "general"
-                search_results = self.search_agent.search(query, search_type)
-                return search_results
-            return []  # Return empty list if search agent not available
-        except Exception as e:
-            logger.error(f"Search and analysis error: {str(e)}")
-            return []
-
-    def _create_execution_plan(
-        self, task: str, complexity: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Enhanced execution planning with autonomous decision-making"""
-        try:
-            messages = [
-                {
-                    "role": "system",
-                    "content": """Create a detailed execution plan.
-                        Return a JSON plan with:
-                        {
-                            "execution_steps": [
-                                {
-                                    "order": int,
-                                    "description": str,
-                                    "tools_needed": [str],
-                                    "success_criteria": str
-                                }
-                            ],
-                            "confidence": float
-                        }""",
-                },
-                {
-                    "role": "user",
-                    "content": f"Task: {task}\nComplexity Analysis: {json.dumps(complexity)}",
-                },
-            ]
-
-            response = self._call_api(messages, stream=False)
-            response_text = response.text
-            logger.debug(f"Plan creation response: {response_text}")
-
-            # Attempt to parse the JSON response
-            try:
-                result = json.loads(response_text)
-                self._update_performance_metrics(
-                    "plan_creation", result.get("confidence", 0.5)
-                )
-                return result
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error in plan creation: {str(e)}")
-                return {"error": "Invalid JSON response"}
-
-        except Exception as e:
-            logger.error(f"Plan creation error: {str(e)}")
-            return {"error": str(e)}
 
     def _update_performance_metrics(self, action_type: str, confidence: float = 0.0):
         """Update performance metrics"""
@@ -452,7 +392,6 @@ class SuperAgent(BaseAgent):
             self.performance_metrics["tool_usage"].get(action_type, 0) + 1
         )
 
-        # Update running average of confidence
         old_avg = self.performance_metrics["average_confidence"]
         n = self.performance_metrics["decisions_made"]
         self.performance_metrics["average_confidence"] = (
@@ -462,37 +401,42 @@ class SuperAgent(BaseAgent):
     def determine_content_type(self, prompt: str) -> str:
         """Determine the most appropriate content type for the given prompt"""
         try:
-            # Get relevant past decisions
             past_decisions = self._get_relevant_memories(prompt)
 
-            # First, analyze task complexity
             complexity = self._analyze_task_complexity(prompt)
             logger.info(f"Task complexity analysis: {complexity}")
             self._update_memory({"type": "analysis", "content": complexity})
 
-            # Get agent descriptions
             agent_descriptions = {
                 "thesis": self.specialized_agents["thesis"].AGENT_DESCRIPTION,
                 "twitter": self.specialized_agents["twitter"].AGENT_DESCRIPTION,
                 "financial": self.specialized_agents["financial"].AGENT_DESCRIPTION,
                 "product": self.specialized_agents["product"].AGENT_DESCRIPTION,
-                "fallback": self.specialized_agents["fallback"].AGENT_DESCRIPTION
+                "fallback": self.specialized_agents["fallback"].AGENT_DESCRIPTION,
             }
 
-            # Include past decisions in the context
-            decision_history = "\n".join([
-                f"Past decision: {m['type']}: {m['content']}"
-                for m in past_decisions if m['type'] == 'decision'
-            ])
+            decision_history = "\n".join(
+                [
+                    f"Past decision: {m['type']}: {m['content']}"
+                    for m in past_decisions
+                    if m["type"] == "decision"
+                ]
+            )
 
             messages = [
                 {
                     "role": "system",
-                    "content": f"""You are an autonomous decision-making agent.
-                    Analyze the prompt and determine the most appropriate agent based on their specializations:
-
+                    "content" : f"""You are an autonomous decision-making agent.
+                    Analyze the prompt and determine the most appropriate agent based on their specializations and research needs.
+                    
+                    Agent specializations:
                     {json.dumps(agent_descriptions, indent=2)}
-
+                    
+                    Search capabilities:
+                    - Quick web searches for current information
+                    - Academic searches for research content
+                    - News searches for recent developments
+                    
                     Consider:
                     1. Topic complexity and scope
                     2. Required detail level
@@ -500,7 +444,10 @@ class SuperAgent(BaseAgent):
                     4. Information density needed
                     5. Best format for engagement
                     6. Primary focus of the content
-
+                    7. Would current information improve the output?
+                    8. Are there facts that should be verified?
+                    9. Would examples help?
+                    10. Is background research needed?
                     Return your decision in JSON format:
                     {{
                         "thoughts": {{
@@ -514,42 +461,52 @@ class SuperAgent(BaseAgent):
                         "confidence": float
                     }}
 
-                    If confidence is below 0.5 or the intent is unclear, select 'fallback' as the content_type."""
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}"
-                    }
+                    Only use fallback if MOST of these are true:
+                        1. The query is extremely vague (e.g., "help", "do something")
+                        2. No clear content type can be determined
+                        3. Multiple very different interpretations are equally likely
+                        4. No keywords match any agent's specialization""",
+                },
+                {
+                    "role": "user",
+                    "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}",
+                },
             ]
 
             response = self._call_api(messages, stream=False)
 
-            # Using your original parsing logic
             try:
-                if hasattr(response, 'json'):
+                if hasattr(response, "json"):
                     result = response.json()
-                    if isinstance(result, dict) and 'choices' in result:
-                        content = result['choices'][0]['message']['content']
+                    if isinstance(result, dict) and "choices" in result:
+                        content = result["choices"][0]["message"]["content"]
                         try:
                             parsed_result = json.loads(content)
-                            content_type = parsed_result.get("content_type", "fallback").lower()
+                            content_type = parsed_result.get(
+                                "content_type", "fallback"
+                            ).lower()
                             confidence = parsed_result.get("confidence", 0.0)
 
-                            # Use fallback for low confidence
                             if confidence < 0.5:
-                                logger.info(f"Low confidence ({confidence}), using fallback")
+                                logger.info(
+                                    f"Low confidence ({confidence}), using fallback"
+                                )
                                 content_type = "fallback"
 
                         except json.JSONDecodeError:
                             match = re.search(r'"content_type":\s*"([^"]+)"', content)
-                            content_type = match.group(1).lower() if match else "fallback"
+                            content_type = (
+                                match.group(1).lower() if match else "fallback"
+                            )
                     else:
                         content_type = "fallback"
                 else:
                     response_text = str(response)
                     try:
                         parsed_result = json.loads(response_text)
-                        content_type = parsed_result.get("content_type", "fallback").lower()
+                        content_type = parsed_result.get(
+                            "content_type", "fallback"
+                        ).lower()
                     except json.JSONDecodeError:
                         match = re.search(r'"content_type":\s*"([^"]+)"', response_text)
                         content_type = match.group(1).lower() if match else "fallback"
@@ -560,10 +517,10 @@ class SuperAgent(BaseAgent):
 
             logger.info(f"Content type decision: {content_type}")
 
-            valid_types = ['thesis', 'twitter', 'financial', 'product', 'fallback']
-            return content_type if content_type in valid_types else 'fallback'
+            valid_types = ["thesis", "twitter", "financial", "product", "fallback"]
+            return content_type if content_type in valid_types else "fallback"
 
         except Exception as e:
             logger.error(f"Content type determination error: {str(e)}")
             logger.error(f"Full error context: {traceback.format_exc()}")
-            return 'fallback'
+            return "fallback"

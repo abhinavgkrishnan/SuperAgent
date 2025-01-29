@@ -18,56 +18,83 @@ class ProductDescriptionAgent(BaseAgent):
         - E-commerce listings
         """
     def __init__(self):
-        super().__init__(temperature=0.7)  # Higher temperature for creative descriptions
+        super().__init__(temperature=0.7)
+        self.agent_type = 'product'  # Add agent type
         self._register_description_tools()
         logger.info("ProductDescriptionAgent initialized with description capabilities")
 
     def _register_description_tools(self):
-        """Register description-specific tools"""
         self.register_tool(
-            name="generate_specs",
+            name="product_generate_specs",
             description="Generate technical specifications",
             method=self._generate_specs,
-            parameters={"product_info": "JSON product information"}
+            parameters={
+                "product_info": "JSON product information",
+                "input_data": "Optional previous specs"
+            }
         )
+
 
         self.register_tool(
-            name="create_marketing_copy",
-            description="Create marketing copy for product",
-            method=self._create_marketing_copy,
-            parameters={"product_info": "JSON product information", "tone": "Desired tone"}
+                name="product_create_marketing_copy",
+                description="Create marketing copy for product",
+                method=self._create_marketing_copy,
+                parameters={
+                    "product_info": "JSON product information",
+                    "tone": "Desired tone",
+                    "input_data": "Optional previous copy"
+                }
+            )
+
+        self.register_tool(
+            name="product_generate",
+            description="Generate complete product description",
+            method=self._generate_full_description,
+            parameters={
+                "product": "Product information",  # Changed from topic
+                "specs": "Technical specifications",
+                "marketing": "Marketing copy",
+                "input_data": "Optional previous content"
+            }
         )
 
-    def _generate_specs(self, product_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate technical specifications"""
+
+    def _generate_specs(self, product_info: Dict[str, Any], input_data: Optional[str] = None) -> Dict[str, Any]:
+        """Generate technical specifications with enhanced error handling"""
         try:
+            # Parse and validate input data
+            data = self.safe_parse_json(product_info)
+            prev_data = self.safe_parse_json(input_data) if input_data else None
+                    
+            
+            # Add context to API call
+            context = f"Previous specifications:\n{json.dumps(prev_data)}\n" if prev_data else ""
             messages = [
                 {
                     "role": "system",
-                    "content": """Generate detailed technical specifications including:
-                    1. Physical specifications
-                    2. Technical features
-                    3. Performance metrics
-                    4. Compatibility information
-                    5. System requirements
-
-                    Return in structured JSON format."""
+                    "content": """Generate detailed technical specifications..."""
                 },
                 {
                     "role": "user",
-                    "content": f"Generate specs for: {json.dumps(product_info)}"
+                    "content": f"{context}Generate specs for: {json.dumps(data)}"
                 }
             ]
-
+    
             response = self._call_api(messages, stream=False)
-            return json.loads(response.json()['choices'][0]['message']['content'])
+            result = response.json()['choices'][0]['message']['content']
+            
+            # Ensure result is valid JSON
+            return self.safe_parse_json(result)
+            
         except Exception as e:
             logger.error(f"Specs generation error: {str(e)}")
             return {"error": str(e)}
 
-    def _create_marketing_copy(self, product_info: Dict[str, Any], tone: str) -> Dict[str, Any]:
+    def _create_marketing_copy(self, product_info: Dict[str, Any], tone: str, input_data: Optional[str] = None) -> Dict[str, Any]:
         """Create marketing copy"""
         try:
+            # Incorporate input_data if provided
+            context = f"Previous marketing copy:\n{input_data}\n" if input_data else ""
             messages = [
                 {
                     "role": "system",
@@ -82,7 +109,7 @@ class ProductDescriptionAgent(BaseAgent):
                 },
                 {
                     "role": "user",
-                    "content": f"Create marketing copy for: {json.dumps(product_info)}"
+                    "content": f"{context}Create marketing copy for: {json.dumps(product_info)}"
                 }
             ]
 
@@ -92,63 +119,25 @@ class ProductDescriptionAgent(BaseAgent):
             logger.error(f"Marketing copy generation error: {str(e)}")
             return {"error": str(e)}
 
-    def generate(self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None) -> Generator[str, None, None]:
-        """Generate product description based on prompt and search results"""
+    def _generate_full_description(self, product: str, specs: Dict[str, Any], marketing: Dict[str, Any], input_data: Optional[str] = None) -> str:
+        """Generate complete product description"""
         try:
-            context = "No additional context available."
-            if search_results:
-                context = "\n".join([
-                    f"Source {i+1}:\n{result.get('snippet', '')}"
-                    for i, result in enumerate(search_results[:3])
-                ])
-
             messages = [
                 {
                     "role": "system",
-                    "content": """Generate a comprehensive product description including:
-                    1. Product Overview
-                    2. Key Features and Benefits
-                    3. Technical Specifications
-                    4. Target Audience
-                    5. Use Cases and Applications
-                    6. Unique Selling Points
-                    7. Pricing and Value Proposition
-                    8. Warranty and Support Information
-
-                    Format the output professionally and include all relevant details."""
+                    "content": """Generate a comprehensive product description by combining:
+                    1. Technical specifications
+                    2. Marketing copy
+                    3. Additional product details
+                    Format as a complete, cohesive description."""
                 },
                 {
                     "role": "user",
-                    "content": f"Product to describe: {prompt}\n\nContext:\n{context}"
+                    "content": f"Product: {product}\nSpecs: {json.dumps(specs)}\nMarketing: {json.dumps(marketing)}\nPrevious content: {input_data if input_data else 'None'}"
                 }
             ]
-
-            response = self._call_api(messages, stream=True)
-            for line in response.iter_lines():
-                if line:
-                    content = line.decode('utf-8')
-                    if content.startswith('data: '):
-                        data_str = content[6:]
-                        if data_str == '[DONE]':
-                            logger.debug("Received [DONE] message, ending stream")
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                if 'content' in delta:
-                                    yield json.dumps({
-                                        'type': 'product',
-                                        'content': delta['content']
-                                    })
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Error parsing response: {str(e)}")
-                            logger.error(f"Response line causing error: {content}")
-                            continue
-
+            response = self._call_api(messages, stream=False)
+            return response.json()['choices'][0]['message']['content']
         except Exception as e:
-            logger.error(f"Product description generation error: {str(e)}")
-            yield json.dumps({
-                'type': 'product',
-                'error': str(e)
-            })
+            logger.error(f"Full description generation error: {str(e)}")
+            return "Error generating full description"

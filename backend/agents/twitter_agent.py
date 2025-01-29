@@ -19,9 +19,31 @@ class TwitterAgent(BaseAgent):
         """
     def __init__(self):
         super().__init__()
+        self.agent_type = 'twitter'
+        self._register_twitter_tools()
         logger.info("TwitterAgent initialized")
+    
+    def _register_twitter_tools(self):
+        self.register_tool(
+            name="twitter_generate",
+            description="Generate Twitter thread from content",
+            method=self._generate_thread,
+            parameters={
+                "topic": "Thread topic",
+                "input_data": "Optional previous content"
+            }
+        )
 
-    def generate(self, prompt: str, search_results: Optional[List[Dict[str, Any]]] = None) -> Generator[str, None, None]:
+    def _generate_thread(self, topic: str, input_data: Optional[str] = None) -> str:
+        """Generate a Twitter thread on the given topic
+        
+        Args:
+            topic (str): The main topic/subject for the thread
+            input_data (Optional[str], optional): Previous content or context. Defaults to None.
+            
+        Returns:
+            str: Generated Twitter thread with tweets separated by newlines
+        """
         try:
             messages = [
                 {
@@ -30,44 +52,20 @@ class TwitterAgent(BaseAgent):
                     1. Start with a hook
                     2. Break complex topics into digestible tweets
                     3. Use clear, concise language
-                    4. Include relevant emojis
+                    4. Include relevant emojis and hashtags
                     5. End with a call to action
                     Each tweet should be prefixed with 🧵 and limited to 280 characters.
                     Format each tweet on a new line."""
                 },
                 {
                     "role": "user",
-                    "content": f"Create a Twitter thread about: {prompt}\nSearch Results: {json.dumps(search_results, indent=2) if search_results else 'No search results available.'}"
+                    "content": f"Create a Twitter thread about: {topic}\nPrevious Content: {input_data if input_data else 'None'}"
                 }
             ]
-    
-            response = self._call_api(messages)
-    
-            for line in response.iter_lines():
-                if line:
-                    content = line.decode('utf-8')
-                    if content.startswith('data: '):
-                        data_str = content[6:]
-                        if data_str == '[DONE]':
-                            logger.debug("Received [DONE] message, ending stream")
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                if 'content' in delta:
-                                    yield json.dumps({
-                                        'type': 'twitter',
-                                        'content': delta['content']
-                                    })
-                        except Exception as e:
-                            logger.error(f"Error parsing response line: {str(e)}")
-                            logger.error(f"Response line causing error: {content}")
-                            continue
-    
+            
+            response = self._call_api(messages, stream=False)
+            return response.json()['choices'][0]['message']['content']
+            
         except Exception as e:
             logger.error(f"Error generating Twitter thread: {str(e)}")
-            yield json.dumps({
-                'type': 'twitter',
-                'error': str(e)
-            })
+            return f"Error generating Twitter thread: {str(e)}"

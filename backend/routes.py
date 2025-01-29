@@ -34,68 +34,53 @@ def init_routes(app):
     @app.route('/api/generate', methods=['POST'])
     def generate_content():
         if not request.is_json:
-            logger.error("Request content-type is not application/json")
             return jsonify({'error': 'Content-Type must be application/json'}), 415
-
+    
         try:
             data = request.get_json()
             if not data or 'prompt' not in data:
-                logger.error("No prompt provided in request data")
                 return jsonify({'error': 'No prompt provided'}), 400
-
+    
             prompt = data['prompt']
             logger.info(f"Received prompt: {prompt}")
-
-            # Let SuperAgent determine content type and select appropriate agent
-            content_type = super_agent.determine_content_type(prompt)
-            agent = super_agent.get_agent_for_type(content_type)
-            logger.info(f"Content type determined by SuperAgent: {content_type}")
-
-            # Get search results based on content type
-            search_type = "scholar" if content_type in ["thesis", "data_analysis"] else "general"
-            search_results = serper_agent.search(prompt, search_type)
-            logger.info(f"Retrieved {len(search_results)} search results")
-
+    
             def generate():
                 try:
                     accumulated_content = ""
-                    for chunk in agent.generate(prompt, search_results=search_results):
+                    execution_info = {}
+                    
+                    for chunk in super_agent.generate(prompt):
                         try:
                             if isinstance(chunk, str):
                                 chunk_data = json.loads(chunk)
                                 if 'content' in chunk_data:
                                     accumulated_content += chunk_data['content']
-                                    if content_type == 'data_analysis':
-                                        logger.info(f"Processing data analysis chunk: {chunk_data}")
                                     yield f"data: {json.dumps(chunk_data)}\n\n"
-                                else:
-                                    logger.warning(f"Invalid chunk format: {type(chunk)}")
+                                if 'execution_info' in chunk_data:
+                                    execution_info = chunk_data['execution_info']
                         except json.JSONDecodeError as e:
-                            logger.error(f"JSON decode error in chunk: {e}, chunk: {chunk}")
+                            logger.error(f"JSON decode error in chunk: {e}")
                             continue
-
+    
                     yield "data: [DONE]\n\n"
-
-                    # Log the complete content to database
+    
+                    # Log to database
                     content_entry = GeneratedContent(
                         prompt=prompt,
                         content=accumulated_content,
-                        content_type=content_type,
+                        content_type=execution_info.get('content_type', 'unknown'),
                         meta_info={
-                            'agent_type': content_type,
-                            'search_type': search_type,
-                            'search_results_count': len(search_results)
+                            'tools_used': super_agent.get_tools_used(),
+                            'execution_path': super_agent.get_execution_path()
                         }
                     )
                     db.session.add(content_entry)
                     db.session.commit()
-                    logger.info(f"Content logged to database with ID: {content_entry.id}")
-
+    
                 except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Error in content generation: {error_msg}")
-                    yield f"data: {json.dumps({'error': error_msg})}\n\n"
-
+                    logger.error(f"Error in generation: {str(e)}")
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
             return Response(
                 stream_with_context(generate()),
                 mimetype='text/event-stream',
@@ -105,7 +90,7 @@ def init_routes(app):
                     'Connection': 'keep-alive'
                 }
             )
-
+    
         except Exception as e:
             logger.error(f"Error in generate_content endpoint: {str(e)}")
             return jsonify({'error': str(e)}), 500
