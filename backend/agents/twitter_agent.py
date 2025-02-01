@@ -2,6 +2,7 @@ from .base_agent import BaseAgent
 from typing import Generator, List, Dict, Any, Optional
 import json
 import logging
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,13 @@ class TwitterAgent(BaseAgent):
         - Hashtag-optimized content
         - Community engagement posts
         """
+
     def __init__(self):
         super().__init__()
         self.agent_type = 'twitter'
         self._register_twitter_tools()
         logger.info("TwitterAgent initialized")
-    
+
     def _register_twitter_tools(self):
         self.register_tool(
             name="twitter_generate",
@@ -31,6 +33,15 @@ class TwitterAgent(BaseAgent):
             parameters={
                 "topic": "Thread topic",
                 "input_data": "Optional previous content"
+            }
+        )
+
+        self.register_tool(
+            name="sentiment_search",
+            description="Fetch recent tweets for sentiment analysis",
+            method=self._fetch_tweets,
+            parameters={
+                "query": "Search query for fetching tweets"
             }
         )
 
@@ -69,3 +80,51 @@ class TwitterAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error generating Twitter thread: {str(e)}")
             return f"Error generating Twitter thread: {str(e)}"
+
+    def _fetch_tweets(self, query: str) -> str:
+        """
+        Fetches tweets related to the input query and returns processed tweet texts.
+
+        Parameters:
+            query (str): The search query for fetching tweets.
+
+        Returns:
+            str: A string of tweet texts separated by two new lines or an error message.
+        """
+        try:
+            url = "https://twitter154.p.rapidapi.com/search/search"
+            querystring = {
+                "query": query,
+                "section": "top",
+                "limit": "10",
+                "language": "en"
+            }
+            headers = {
+                "x-rapidapi-host": "twitter154.p.rapidapi.com",
+                "x-rapidapi-key": "6515c7e475msh0ed450cd255b854p18231djsnc17678d20da3"
+            }
+
+            response = requests.get(url, headers=headers, params=querystring)
+
+            if response.status_code == 200:
+                output = response.json()
+                tweet_texts = []
+                for tweet in output.get("results", []):
+                    tweet_text = tweet.get("text", "")
+                    if tweet_text:
+                        tweet_texts.append(tweet_text)
+                        
+                if tweet_texts:
+                    logger.info(f"Fetched {len(tweet_texts)} tweets for query: {query}")
+                    return "\n\n".join(tweet_texts)
+                else:
+                    logger.warning(f"No tweets found for query: {query}")
+                    return "No tweets found for the given query."
+
+            else:
+                logger.error(f"Failed to fetch data. Status code: {response.status_code}, Response: {response.text}")
+                return f"Failed to fetch data. Status code: {response.status_code}, Response: {response.text}"
+
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while fetching tweets: {e}")
+            return f"An unexpected error occurred: {e}"
