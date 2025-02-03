@@ -65,8 +65,8 @@ class ProductDescriptionAgent(BaseAgent):
             # Parse and validate input data
             data = self.safe_parse_json(product_info)
             prev_data = self.safe_parse_json(input_data) if input_data else None
-                    
-            
+
+
             # Add context to API call
             context = f"Previous specifications:\n{json.dumps(prev_data)}\n" if prev_data else ""
             messages = [
@@ -79,45 +79,59 @@ class ProductDescriptionAgent(BaseAgent):
                     "content": f"{context}Generate specs for: {json.dumps(data)}"
                 }
             ]
-    
+
             response = self._call_api(messages, stream=False)
             result = response.json()['choices'][0]['message']['content']
-            
+
             # Ensure result is valid JSON
             return self.safe_parse_json(result)
-            
+
         except Exception as e:
             logger.error(f"Specs generation error: {str(e)}")
             return {"error": str(e)}
 
-    def _create_marketing_copy(self, product_info: Dict[str, Any], tone: str, input_data: Optional[str] = None) -> Dict[str, Any]:
-        """Create marketing copy"""
+    def _create_marketing_copy(self, product_info: Dict[str, Any], tone: str = "exciting", input_data: Optional[str] = None) -> str:
+        """Create marketing copy with a clean, readable format"""
         try:
+            # Ensure proper product info format
+            if isinstance(product_info, str):
+                product_info = json.loads(product_info)
+            
             # Incorporate input_data if provided
             context = f"Previous marketing copy:\n{input_data}\n" if input_data else ""
+            
             messages = [
                 {
                     "role": "system",
-                    "content": f"""Create compelling marketing copy in a {tone} tone. Include:
-                    1. Headlines
-                    2. Product description
-                    3. Key benefits
-                    4. Unique selling points
-                    5. Call to action
-
-                    Return in structured JSON format."""
+                    "content": f"""Create compelling marketing copy in a {tone} tone. 
+                    Output should be a clean, formatted text with:
+                    - A compelling headline
+                    - An engaging subheadline
+                    - A descriptive paragraph
+                    - Clear benefits list
+                    - Unique product points
+                    - A strong call to action
+    
+                    Format as plain text, avoiding JSON or markdown."""
                 },
                 {
-                    "role": "user",
+                    "role": "user", 
                     "content": f"{context}Create marketing copy for: {json.dumps(product_info)}"
                 }
             ]
-
+    
             response = self._call_api(messages, stream=False)
-            return json.loads(response.json()['choices'][0]['message']['content'])
+            return response.json()['choices'][0]['message']['content']
+                
         except Exception as e:
             logger.error(f"Marketing copy generation error: {str(e)}")
-            return {"error": str(e)}
+            return f"""Marketing Copy Generation Error
+    
+    Unable to create marketing copy due to an unexpected issue.
+    
+    Please try again or contact support if the problem persists.
+    
+    Error details: {str(e)}"""
 
     def _generate_full_description(self, product: str, specs: Dict[str, Any], marketing: Dict[str, Any], input_data: Optional[str] = None) -> str:
         """Generate complete product description"""

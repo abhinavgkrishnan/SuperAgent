@@ -46,29 +46,139 @@ class ThesisAgent(BaseAgent):
             }
         )
 
-    def _generate_thesis_content(self, topic: str, analysis: str, input_data: Optional[str] = None) -> str:
-        """Separated thesis generation into its own tool method"""
-        messages = [
-            {
-                "role": "system",
-                "content": """Generate a focused thesis following this structure:
+    def _generate_thesis_content(self, topic: str, analysis: Optional[str] = None, input_data: Optional[str] = None) -> str:
+        """Generate structured thesis content with enhanced error handling and validation.
+        
+        Args:
+            topic: Main thesis topic
+            analysis: Research analysis to base thesis on (optional)
+            input_data: Previous content (optional)
+            
+        Returns:
+            str: Generated thesis content
+            
+        Raises:
+            ValueError: If topic is empty
+        """
+        try:
+            # Validate inputs
+            if not topic or not topic.strip():
+                raise ValueError("Topic cannot be empty")
+                
+            # Ensure analysis is a string
+            analysis = str(analysis) if analysis is not None else ""
+            
+            # Create system prompt with detailed instructions
+            system_prompt = """Generate a focused thesis following this structure:
                 # Title
+                Provide a clear, specific title that reflects the research focus.
+                
                 ## Abstract
+                A concise summary of the research (250-300 words) covering:
+                - Context and importance
+                - Research objective
+                - Key findings
+                - Implications
+                
                 ## Introduction
+                - Background and context
+                - Problem statement
+                - Research objectives
+                - Significance of the study
+                
                 ## Methodology
+                - Research approach
+                - Data collection methods
+                - Analysis methods
+                - Limitations
+                
                 ## Results
+                - Key findings
+                - Supporting data
+                - Statistical analysis where applicable
+                
                 ## Discussion
+                - Interpretation of results
+                - Comparison with existing literature
+                - Implications of findings
+                - Research limitations
+                
                 ## Conclusion
-                ## References"""
-            },
-            {
-                "role": "user",
-                "content": f"Topic: {topic}\n\nResearch Analysis:\n{analysis}\nPrevious Content:\n{input_data if input_data else 'None'}"
-            }
-        ]
-
-        response = self._call_api(messages, stream=False)
-        return response.json()['choices'][0]['message']['content']
+                - Summary of key findings
+                - Research contributions
+                - Future research directions
+                - Concluding remarks
+                
+                ## References
+                Use proper academic citation format.
+                
+                IMPORTANT:
+                - Maintain academic tone and style
+                - Use evidence-based arguments
+                - Include critical analysis
+                - Ensure logical flow between sections"""
+    
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": f"""Topic: {topic}
+                    
+                    Research Analysis:
+                    {analysis}
+                    
+                    Previous Content:
+                    {input_data if input_data else 'None'}
+                    
+                    Please generate a comprehensive thesis following the structure provided."""
+                }
+            ]
+    
+            # Make API call with error handling
+            response = self._call_api(messages, stream=False)
+            if not response.ok:
+                logger.error(f"API call failed: {response.status_code} - {response.text}")
+                raise Exception(f"API request failed with status {response.status_code}")
+    
+            response_json = response.json()
+            if not response_json.get('choices'):
+                raise ValueError("Invalid API response format")
+    
+            content = response_json['choices'][0]['message']['content']
+            
+            # Validate output
+            if not content or len(content.strip()) < 100:  # Basic validation
+                raise ValueError("Generated content is too short or empty")
+                
+            # Basic structure validation
+            required_sections = ["Title", "Abstract", "Introduction", "Methodology", 
+                               "Results", "Discussion", "Conclusion", "References"]
+            
+            for section in required_sections:
+                if section.lower() not in content.lower():
+                    logger.warning(f"Generated content missing section: {section}")
+    
+            return content
+    
+        except Exception as e:
+            logger.error(f"Error generating thesis content: {str(e)}")
+            # Return a structured error message that can be handled by the calling function
+            error_content = f"""# Error Generating Thesis Content
+    
+    ## Error Details
+    {str(e)}
+    
+    ## Suggestions
+    - Please try again with a more specific topic
+    - Ensure research analysis is provided if required
+    - Check network connection if error persists
+    
+    If the problem continues, please contact support."""
+            
+            return error_content
 
     def _analyze_sources(self, sources: Optional[List[Dict[str, Any]]] = None, input_data: Optional[str] = None) -> str:
         # Original implementation, just added input_data parameter

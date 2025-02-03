@@ -17,7 +17,7 @@ class SerperAgent(BaseAgent):
     - Real-time information gathering
     - Comprehensive data collection
     """
-    
+
     def __init__(self):
         super().__init__(temperature=0.3)  # Lower temperature for more precise results
         self.agent_type = 'serper'
@@ -27,7 +27,7 @@ class SerperAgent(BaseAgent):
     def _register_search_tools(self):
         # Register search tools
         self.register_tool(
-            name="scholar_search",
+            name="scholar_search",  # Original name
             description="Search academic sources using Serper Scholar API",
             method=self._search_scholar,
             parameters={
@@ -37,7 +37,7 @@ class SerperAgent(BaseAgent):
         )
 
         self.register_tool(
-            name="general_search",
+            name="general_search",  # Original name
             description="Search general information using Serper API",
             method=self._search_general,
             parameters={
@@ -46,9 +46,8 @@ class SerperAgent(BaseAgent):
             }
         )
 
-        # Register generate tool to comply with BaseAgent pattern
         self.register_tool(
-            name="serper_generate",
+            name="serper_generate",  # Keep this prefix since it's part of main name
             description="Generate formatted search results response",
             method=self._generate_search_response,
             parameters={
@@ -123,12 +122,12 @@ class SerperAgent(BaseAgent):
     def _generate_search_response(self, query: str, search_type: str = "general", input_data: Optional[str] = None) -> str:
         """
         Generate a formatted search response. This is the primary generation method used by BaseAgent.generate()
-        
+
         Args:
             query: The search query
             search_type: Type of search to perform ("general" or "scholar")
             input_data: Optional previous search results
-            
+
         Returns:
             str: JSON string containing formatted search results
         """

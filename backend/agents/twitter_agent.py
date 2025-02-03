@@ -58,15 +58,16 @@ class TwitterAgent(BaseAgent):
         try:
             messages = [
                 {
-                    "role": "system",
-                    "content": """You are a Twitter thread writer. Create engaging, informative threads that:
-                    1. Start with a hook
-                    2. Break complex topics into digestible tweets
-                    3. Use clear, concise language
-                    4. Include relevant emojis and hashtags
-                    5. End with a call to action
-                    Each tweet should be prefixed with 🧵 and limited to 280 characters.
-                    Format each tweet on a new line."""
+                    "role": "system", 
+                    "content": """Generate engaging tweets about the topic. Each tweet should:
+                    1. Be factual and informative
+                    2. Use clear, concise language
+                    3. Include relevant hashtags and emojis
+                    4. Stay under 280 characters
+                    5. Focus on key insights/findings
+                    
+                    Do NOT generate questions or clarifications.
+                    Format: One tweet per line, prefixed with 🧵"""
                 },
                 {
                     "role": "user",
@@ -78,8 +79,8 @@ class TwitterAgent(BaseAgent):
             return response.json()['choices'][0]['message']['content']
             
         except Exception as e:
-            logger.error(f"Error generating Twitter thread: {str(e)}")
-            return f"Error generating Twitter thread: {str(e)}"
+            logger.error(f"Error generating tweets: {str(e)}")
+            return f"Error generating tweets: {str(e)}"
 
     def _fetch_tweets(self, query: str) -> str:
         """
