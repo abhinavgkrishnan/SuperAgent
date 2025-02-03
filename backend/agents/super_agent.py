@@ -46,12 +46,12 @@ class SuperAgent(BaseAgent):
         self.search_agent = search_agent
         self.specialized_agents = specialized_agents or {}
         self.selected_agents = selected_agents or []
+        self.all_agents = set(self.specialized_agents.keys()) | {'serper'}
         self.tool_registry = ToolRegistry()
         self._register_all_agent_tools()
         logger.info("SuperAgent initialized with enhanced orchestration capabilities")
 
     def _register_all_agent_tools(self):
-        """Register tools from selected specialized agents"""
         for agent_type, agent in self.specialized_agents.items():
             if agent_type in self.selected_agents or agent_type == 'fallback':
                 agent_tools = agent.get_available_tools()
@@ -64,20 +64,6 @@ class SuperAgent(BaseAgent):
                         agent_type=agent.agent_type,
                     )
         
-        # Always register fallback agent tools
-        fallback_agent = self.specialized_agents.get('fallback')
-        if fallback_agent:
-            fallback_tools = fallback_agent.get_available_tools()
-            for tool_id, tool_info in fallback_tools.items():
-                self.tool_registry.register_tool(
-                    name=tool_id,
-                    description=tool_info["description"],
-                    method=fallback_agent.tools[tool_id].method,
-                    parameters=tool_info["parameters"],
-                    agent_type='fallback',
-                )
-    
-        # Then register Serper tools if available
         if self.search_agent:
             serper_tools = self.search_agent.get_available_tools()
             for tool_id, tool_info in serper_tools.items():
@@ -170,24 +156,25 @@ class SuperAgent(BaseAgent):
         for attempt in range(max_retries):
             try:
                 content_type = self.determine_content_type(prompt)
-                logger.info(f"Content type determined: {content_type}")
-
                 if content_type == "fallback":
                     yield from self.specialized_agents["fallback"].generate(prompt)
                     return
-
+                logger.info(f"Content type determined: {content_type}")
+    
+                if content_type not in self.selected_agents:
+                    yield from self.specialized_agents["fallback"].generate(prompt)
+                    return
+    
                 tool_sequence = self._get_tool_sequence(prompt, content_type)
                 if not tool_sequence:
-                    # Try direct generation with appropriate agent instead of fallback
                     agent = self.get_agent_for_type(content_type)
                     if agent:
                         yield from agent.generate(prompt)
                         return
-
-                # Execute tool sequence with better error handling
+    
                 yield from self._execute_tool_sequence(tool_sequence, content_type)
                 return
-
+    
             except Exception as e:
                 logger.error(f"Generation attempt {attempt + 1} failed: {str(e)}")
                 if attempt == max_retries - 1:
@@ -335,14 +322,11 @@ class SuperAgent(BaseAgent):
         return self.execution_path
 
     def get_agent_for_type(self, content_type: str) -> BaseAgent:
-        """Get the appropriate agent for the content type with fallback"""
-        try:
-            return self.specialized_agents.get(
-                content_type, self.specialized_agents["thesis"]
-            )
-        except Exception as e:
-            logger.error(f"Error getting agent for type {content_type}: {str(e)}")
-            return self.specialized_agents["thesis"]
+        if content_type in self.selected_agents:
+            agent = self.specialized_agents.get(content_type)
+            if agent:
+                return agent
+        return self.specialized_agents["fallback"]
 
     def _analyze_task_complexity(self, task: str) -> Dict[str, Any]:
         """Enhanced task complexity analysis with self-improvement capability"""
@@ -481,17 +465,17 @@ class SuperAgent(BaseAgent):
     def determine_content_type(self, prompt: str) -> str:
         try:
             past_decisions = self._get_relevant_memories(prompt)
-
+    
             complexity = self._analyze_task_complexity(prompt)
             logger.info(f"Task complexity analysis: {complexity}")
             self._update_memory({"type": "analysis", "content": complexity})
-
+    
             agent_descriptions = {
                 agent_type: agent.AGENT_DESCRIPTION
                 for agent_type, agent in self.specialized_agents.items()
-                if agent_type != 'fallback'
+                if agent_type in self.selected_agents and agent_type != 'fallback'
             }
-
+    
             decision_history = "\n".join(
                 [
                     f"Past decision: {m['type']}: {m['content']}"
@@ -499,21 +483,21 @@ class SuperAgent(BaseAgent):
                     if m["type"] == "decision"
                 ]
             )
-
+    
             messages = [
                 {
                     "role": "system",
                     "content": f"""You are an autonomous decision-making agent.
                     Analyze the prompt and determine the most appropriate agent based on their specializations and research needs.
-
+    
                     Available agent specializations:
                     {json.dumps(agent_descriptions, indent=2)}
-
+    
                     Search capabilities:
                     - Quick web searches for current information
                     - Academic searches for research content
                     - News searches for recent developments
-
+    
                     Consider:
                     1. Topic complexity and scope
                     2. Required detail level
@@ -537,7 +521,7 @@ class SuperAgent(BaseAgent):
                         "content_type": "{"|".join(agent_descriptions.keys())}|fallback",
                         "confidence": float
                     }}
-
+    
                     Only use fallback if MOST of these are true:
                         1. The query is extremely vague (e.g., "help", "do something")
                         2. No clear content type can be determined
@@ -549,9 +533,9 @@ class SuperAgent(BaseAgent):
                     "content": f"Task: {prompt}\n\nPrevious Decisions:\n{decision_history}",
                 },
             ]
-
+    
             response = self._call_api(messages, stream=False)
-
+    
             try:
                 if hasattr(response, "json"):
                     result = response.json()
@@ -559,17 +543,10 @@ class SuperAgent(BaseAgent):
                         content = result["choices"][0]["message"]["content"]
                         try:
                             parsed_result = json.loads(content)
-                            content_type = parsed_result.get(
-                                "content_type", "fallback"
-                            ).lower()
-                            confidence = parsed_result.get("confidence", 0.0)
-
-                            if confidence < 0.5:
-                                logger.info(
-                                    f"Low confidence ({confidence}), using fallback"
-                                )
-                                content_type = "fallback"
-
+                            content_type = parsed_result.get("content_type", "fallback").lower()
+                            if content_type not in self.selected_agents and content_type != 'fallback':
+                                return "fallback"
+                            return content_type
                         except json.JSONDecodeError:
                             match = re.search(r'"content_type":\s*"([^"]+)"', content)
                             content_type = (
@@ -587,16 +564,16 @@ class SuperAgent(BaseAgent):
                     except json.JSONDecodeError:
                         match = re.search(r'"content_type":\s*"([^"]+)"', response_text)
                         content_type = match.group(1).lower() if match else "fallback"
-
+    
             except Exception as parse_error:
                 logger.error(f"Error parsing response: {parse_error}")
                 content_type = "fallback"
-
+    
             logger.info(f"Content type decision: {content_type}")
-
-            valid_types = ["thesis", "twitter", "financial", "product", "fallback"]
+    
+            valid_types = set(self.selected_agents) | {"fallback"}
             return content_type if content_type in valid_types else "fallback"
-
+    
         except Exception as e:
             logger.error(f"Content type determination error: {str(e)}")
             logger.error(f"Full error context: {traceback.format_exc()}")

@@ -91,13 +91,10 @@ class ProductDescriptionAgent(BaseAgent):
             return {"error": str(e)}
 
     def _create_marketing_copy(self, product_info: Dict[str, Any], tone: str = "exciting", input_data: Optional[str] = None) -> str:
-        """Create marketing copy with a clean, readable format"""
         try:
-            # Ensure proper product info format
             if isinstance(product_info, str):
                 product_info = json.loads(product_info)
             
-            # Incorporate input_data if provided
             context = f"Previous marketing copy:\n{input_data}\n" if input_data else ""
             
             messages = [
@@ -123,15 +120,12 @@ class ProductDescriptionAgent(BaseAgent):
             response = self._call_api(messages, stream=False)
             return response.json()['choices'][0]['message']['content']
                 
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON input: {str(e)}")
+            return "Error: Invalid input format"
         except Exception as e:
             logger.error(f"Marketing copy generation error: {str(e)}")
-            return f"""Marketing Copy Generation Error
-    
-    Unable to create marketing copy due to an unexpected issue.
-    
-    Please try again or contact support if the problem persists.
-    
-    Error details: {str(e)}"""
+            return f"Marketing Copy Generation Error: {str(e)}"
 
     def _generate_full_description(self, product: str, specs: Dict[str, Any], marketing: Dict[str, Any], input_data: Optional[str] = None) -> str:
         """Generate complete product description"""
