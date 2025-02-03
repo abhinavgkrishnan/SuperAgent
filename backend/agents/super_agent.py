@@ -1,6 +1,7 @@
 from .base_agent import BaseAgent
 from typing import Generator, Dict, Any, List, Optional
 import logging
+from logging.handlers import RotatingFileHandler
 import json
 import asyncio
 from datetime import datetime
@@ -13,22 +14,22 @@ from .shared_tools import ToolRegistry
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
 
-# Create a log file handler
+# Create a rotating log file handler
 log_file = "super_agent.log"
+rotating_handler = RotatingFileHandler(log_file, mode="a", maxBytes=5*1024*1024, backupCount=2, encoding=None, delay=False)
 
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(module)s - %(funcName)s - %(message)s",
     handlers=[
-        logging.FileHandler(log_file, mode="w"),
+        rotating_handler,
         logging.StreamHandler(),
     ],
 )
 
 logger = logging.getLogger(__name__)
 logger.info("Logging system initialized successfully")
-
 
 class SuperAgent(BaseAgent):
     def __init__(self, search_agent=None, specialized_agents=None):
