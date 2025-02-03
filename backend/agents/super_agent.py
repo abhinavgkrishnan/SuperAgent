@@ -32,11 +32,11 @@ logger = logging.getLogger(__name__)
 logger.info("Logging system initialized successfully")
 
 class SuperAgent(BaseAgent):
-    def __init__(self, search_agent=None, specialized_agents=None):
+    def __init__(self, search_agent=None, specialized_agents=None, selected_agents=None):
         super().__init__(temperature=0.3)
         self.memory = []
-        self.tools_used = []  # Initialize at class level
-        self.execution_path = []  # Initialize at class level
+        self.tools_used = []
+        self.execution_path = []
         self.performance_metrics = {
             "decisions_made": 0,
             "successful_executions": 0,
@@ -45,34 +45,46 @@ class SuperAgent(BaseAgent):
         }
         self.search_agent = search_agent
         self.specialized_agents = specialized_agents or {}
+        self.selected_agents = selected_agents or []
         self.tool_registry = ToolRegistry()
         self._register_all_agent_tools()
         logger.info("SuperAgent initialized with enhanced orchestration capabilities")
 
     def _register_all_agent_tools(self):
-        """Register tools from all specialized agents"""
-        # First register tools from specialized agents
+        """Register tools from selected specialized agents"""
         for agent_type, agent in self.specialized_agents.items():
-            agent_tools = agent.get_available_tools()
-            for tool_id, tool_info in agent_tools.items():
+            if agent_type in self.selected_agents or agent_type == 'fallback':
+                agent_tools = agent.get_available_tools()
+                for tool_id, tool_info in agent_tools.items():
+                    self.tool_registry.register_tool(
+                        name=tool_id,
+                        description=tool_info["description"],
+                        method=agent.tools[tool_id].method,
+                        parameters=tool_info["parameters"],
+                        agent_type=agent.agent_type,
+                    )
+        
+        # Always register fallback agent tools
+        fallback_agent = self.specialized_agents.get('fallback')
+        if fallback_agent:
+            fallback_tools = fallback_agent.get_available_tools()
+            for tool_id, tool_info in fallback_tools.items():
                 self.tool_registry.register_tool(
                     name=tool_id,
                     description=tool_info["description"],
-                    method=agent.tools[tool_id].method,
+                    method=fallback_agent.tools[tool_id].method,
                     parameters=tool_info["parameters"],
-                    agent_type=agent.agent_type,
+                    agent_type='fallback',
                 )
     
         # Then register Serper tools if available
         if self.search_agent:
             serper_tools = self.search_agent.get_available_tools()
             for tool_id, tool_info in serper_tools.items():
-                # Keep original tool_id for method lookup
-                logger.info(f"Registering Serper tool: {tool_id}")
                 self.tool_registry.register_tool(
                     name=tool_id,
                     description=tool_info["description"],
-                    method=self.search_agent.tools[tool_id].method,  # Use original tool_id
+                    method=self.search_agent.tools[tool_id].method,
                     parameters=tool_info["parameters"],
                     agent_type='serper'
                 )
@@ -80,18 +92,23 @@ class SuperAgent(BaseAgent):
     def _execute_tool_sequence(self, tool_sequence: List[Dict[str, Any]], content_type: str) -> Generator[str, None, None]:
         accumulated_result = None
         step_outputs = {}
-
+    
         for step_index, step in enumerate(tool_sequence, 1):
             try:
                 tool_id = step.get('tool_id')
                 if not tool_id:
                     logger.warning("No tool_id in step")
                     continue
-
+    
                 # Get the tool
                 tool = self.tool_registry.get_tool(tool_id)
                 if tool is None:
                     logger.error(f"Tool {tool_id} not found in registry")
+                    continue
+    
+                # Check if the tool belongs to a selected agent or is a fallback/search tool
+                if tool.agent_type not in self.selected_agents and tool.agent_type not in ['fallback', 'serper']:
+                    logger.warning(f"Skipping tool {tool_id} as it belongs to an unselected agent: {tool.agent_type}")
                     continue
 
                 # Prepare parameters
@@ -182,12 +199,13 @@ class SuperAgent(BaseAgent):
             # Convert tools to serializable format
             tools_info = {}
             for tool_id, tool in self.tool_registry.get_all_tools().items():
-                tools_info[tool_id] = {
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                    "agent_type": tool.agent_type,
-                }
-
+                if tool.agent_type in self.selected_agents or tool.agent_type in ['fallback', 'serper']:
+                    tools_info[tool_id] = {
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                        "agent_type": tool.agent_type,
+                    }
+    
             messages = [
                 {
                     "role": "system",
@@ -197,20 +215,20 @@ class SuperAgent(BaseAgent):
                     1. Use scholar_search for academic/technical content
                     2. Use general_search for recent information
                     3. Use sentiment_search for public opinion
-
+    
                     Current search tools available:
                     - serper_scholar_search: Academic sources
                     - serper_general_search: Web content
                     - twitter_sentiment_search: Public sentiment
-
+    
                     Available tools: {json.dumps(tools_info, indent=2)}
-
+    
                     When creating the sequence:
                     1. Consider if searches would improve the output
                     2. Think about what specific information would be most valuable
                     3. Plan how to use the search results in later steps
                     4. Consider multiple searches if different types of information are needed
-
+    
                     IMPORTANT: Your response must be a valid JSON array in this exact format:
                     [
                         {{
@@ -222,67 +240,67 @@ class SuperAgent(BaseAgent):
                             "expected_output": "what this step produces"
                         }}
                     ]
-
+    
                     Do not include any explanatory text before or after the JSON array.
                     """
                 },
                 {"role": "user", "content": f"Task: {task}"}
             ]
-
+    
             response = self._call_api(messages, stream=False)
             content = response.json()['choices'][0]['message']['content']
-
+    
             # Clean the content - remove any markdown code block indicators
             content = re.sub(r'```json\s*', '', content)
             content = re.sub(r'```\s*', '', content)
-
+    
             # Find the JSON array
             matches = re.findall(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
             if not matches:
                 logger.error("No JSON array found in response")
                 logger.debug(f"Response content: {content}")
                 return []
-
+    
             # Initialize json_str before the try block
             json_str = matches[0].strip()
-
+    
             try:
                 # Clean and parse the JSON
                 # Remove trailing commas before closing brackets/braces
                 json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
                 # Remove any remaining whitespace between brackets
                 json_str = re.sub(r'\]\s*\[', '][', json_str)
-
+    
                 sequence = json.loads(json_str)
-
+    
                 # Validate sequence structure
                 if not isinstance(sequence, list):
                     logger.error(f"Parsed result is not a list: {type(sequence)}")
                     return []
-
+    
                 # Validate each step in the sequence
                 required_keys = {"tool_id", "parameters", "reason", "expected_output"}
                 for i, step in enumerate(sequence):
                     if not isinstance(step, dict):
                         logger.error(f"Step {i} is not a dictionary: {type(step)}")
                         return []
-
+    
                     missing_keys = required_keys - set(step.keys())
                     if missing_keys:
                         logger.error(f"Step {i} missing required keys: {missing_keys}")
                         return []
-
+    
                     if not isinstance(step["parameters"], dict):
                         logger.error(f"Step {i} parameters is not a dictionary: {type(step['parameters'])}")
                         return []
-
+    
                 logger.info(f"Successfully parsed tool sequence with {len(sequence)} steps")
                 return sequence
-
+    
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parsing error: {str(e)}")
                 logger.error(f"Problematic JSON string: {json_str}")
-
+    
                 # Attempt more aggressive cleaning if initial parse fails
                 try:
                     # Remove all whitespace and newlines
@@ -292,7 +310,7 @@ class SuperAgent(BaseAgent):
                     json_str = re.sub(r"'", '"', json_str)
                     # Remove escape characters
                     json_str = json_str.encode().decode('unicode-escape')
-
+    
                     sequence = json.loads(json_str)
                     if isinstance(sequence, list) and all(isinstance(step, dict) for step in sequence):
                         logger.info("Successfully parsed JSON after cleaning")
@@ -300,9 +318,9 @@ class SuperAgent(BaseAgent):
                 except Exception as fix_error:
                     logger.error(f"Failed to fix JSON: {str(fix_error)}")
                     return []
-
+    
                 return []  # Return empty list if JSON parsing fails
-
+    
         except Exception as e:
             logger.error(f"Error in tool sequence generation: {str(e)}")
             logger.error(f"Full error context: {traceback.format_exc()}")
@@ -430,7 +448,7 @@ class SuperAgent(BaseAgent):
             # Access id after commit when the object is properly persisted
             if hasattr(memory_entry, 'id'):
                 logger.info(f"Created memory entry with ID: {memory_entry.id} for type: {entry['type']}")
-    
+
             # Clean up old entries keeping only last 100
             old_entries = (
                 AgentMemory.query.order_by(AgentMemory.timestamp.desc())
@@ -443,7 +461,7 @@ class SuperAgent(BaseAgent):
                 db.session.delete(old_entry)
             db.session.commit()
             logger.info("Old memory entries cleaned up")
-    
+
         except Exception as e:
             logger.error(f"Error updating memory: {str(e)}")
 
@@ -461,7 +479,6 @@ class SuperAgent(BaseAgent):
         ) / n
 
     def determine_content_type(self, prompt: str) -> str:
-        """Determine the most appropriate content type for the given prompt"""
         try:
             past_decisions = self._get_relevant_memories(prompt)
 
@@ -470,11 +487,9 @@ class SuperAgent(BaseAgent):
             self._update_memory({"type": "analysis", "content": complexity})
 
             agent_descriptions = {
-                "thesis": self.specialized_agents["thesis"].AGENT_DESCRIPTION,
-                "twitter": self.specialized_agents["twitter"].AGENT_DESCRIPTION,
-                "financial": self.specialized_agents["financial"].AGENT_DESCRIPTION,
-                "product": self.specialized_agents["product"].AGENT_DESCRIPTION,
-                "fallback": self.specialized_agents["fallback"].AGENT_DESCRIPTION,
+                agent_type: agent.AGENT_DESCRIPTION
+                for agent_type, agent in self.specialized_agents.items()
+                if agent_type != 'fallback'
             }
 
             decision_history = "\n".join(
@@ -488,10 +503,10 @@ class SuperAgent(BaseAgent):
             messages = [
                 {
                     "role": "system",
-                    "content" : f"""You are an autonomous decision-making agent.
+                    "content": f"""You are an autonomous decision-making agent.
                     Analyze the prompt and determine the most appropriate agent based on their specializations and research needs.
 
-                    Agent specializations:
+                    Available agent specializations:
                     {json.dumps(agent_descriptions, indent=2)}
 
                     Search capabilities:
@@ -519,7 +534,7 @@ class SuperAgent(BaseAgent):
                             "criticism": "Potential drawbacks of this choice",
                             "speak": "Brief explanation for user"
                         }},
-                        "content_type": "thesis|twitter|financial|product|fallback",
+                        "content_type": "{"|".join(agent_descriptions.keys())}|fallback",
                         "confidence": float
                     }}
 

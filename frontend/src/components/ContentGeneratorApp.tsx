@@ -1,16 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Input } from './ui/input';
-import { Send } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { CopyButton } from './ui/copy-button';
-import { TypingIndicator } from './ui/typing-indicator';
+import React, { useState, useEffect, useRef } from "react";
+import { Input } from "./ui/input";
+import { Send, Check } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { CopyButton } from "./ui/copy-button";
+import { TypingIndicator } from "./ui/typing-indicator";
+import {
+  Select,
+  SelectContent,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 
 const IconWrapper = ({ icon: Icon }: { icon: LucideIcon }) => {
   return <Icon className="w-5 h-5" />;
 };
 
 interface Message {
-  type: 'ai' | 'user';
+  type: "ai" | "user";
   content: string;
   visualizations?: Array<{
     type: string;
@@ -20,51 +26,91 @@ interface Message {
   isInitial?: boolean;
 }
 
+const availableAgents = [
+  {
+    value: "thesis",
+    label: "Thesis Agent",
+    description: "Specializes in long-form academic content",
+  },
+  {
+    value: "twitter",
+    label: "Twitter Agent",
+    description: "Creates short-form social media content",
+  },
+  {
+    value: "financial",
+    label: "Financial Agent",
+    description: "Generates financial reports and analysis",
+  },
+  {
+    value: "product",
+    label: "Product Description Agent",
+    description: "Writes compelling product descriptions",
+  },
+];
+
 export function ContentGeneratorApp() {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([
+    "thesis",
+    "twitter",
+    "financial",
+    "product",
+  ]);
+
+  const handleAgentSelection = (agent: string) => {
+    setSelectedAgents((prev) =>
+      prev.includes(agent)
+        ? prev.filter((a) => a !== agent)
+        : [...prev, agent]
+    );
+  };
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Add initial greeting message
-    setMessages([{
-      type: 'ai',
-      content: "Hi! I'm an AI agent specialized in content writing. I can help you create various types of content, from concise tweets to detailed academic papers and data analysis. What topic would you like me to write about?",
-      isInitial: true
-    }]);
+    setMessages([
+      {
+        type: "ai",
+        content:
+          "Hi! I'm an AI agent specialized in content writing. I can help you create various types of content, from concise tweets to detailed academic papers and data analysis. What topic would you like me to write about?",
+        isInitial: true,
+      },
+    ]);
   }, []);
 
   useEffect(() => {
-    // Scroll to bottom whenever messages change
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const generateContent = async () => {
     if (!prompt.trim()) {
-      setError('Please enter a prompt');
+      setError("Please enter a prompt");
+      return;
+    }
+
+    if (selectedAgents.length === 0) {
+      setError("Please select at least one agent");
       return;
     }
 
     setIsGenerating(true);
     setError(null);
-    // Clear input immediately
     const currentPrompt = prompt;
-    setPrompt('');
+    setPrompt("");
 
-    // Add user message
-    setMessages(prev => [...prev, { type: 'user', content: currentPrompt }]);
-
-    // Add temporary AI message with typing indicator
-    setMessages(prev => [...prev, { type: 'ai', content: '' }]);
+    setMessages((prev) => [...prev, { type: "user", content: currentPrompt }]);
+    setMessages((prev) => [...prev, { type: "ai", content: "" }]);
 
     try {
-      const response = await fetch('http://localhost:8000/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: currentPrompt })
+      const response = await fetch("http://localhost:8000/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: currentPrompt, selectedAgents }),
       });
 
       if (!response.ok) {
@@ -72,29 +118,29 @@ export function ContentGeneratorApp() {
       }
 
       const reader = response.body?.getReader();
-      let accumulatedContent = '';
+      let accumulatedContent = "";
       let currentVisualizations: any[] = [];
 
       if (reader) {
         const decoder = new TextDecoder();
-        let buffer = '';
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
-          const messages = buffer.split('\n\n');
-          buffer = messages.pop() || '';
+          const messages = buffer.split("\n\n");
+          buffer = messages.pop() || "";
 
           for (const message of messages) {
             const trimmedMessage = message.trim();
             if (!trimmedMessage) continue;
 
-            if (trimmedMessage.startsWith('data: ')) {
+            if (trimmedMessage.startsWith("data: ")) {
               const jsonStr = trimmedMessage.slice(5).trim();
 
-              if (jsonStr === '[DONE]') {
+              if (jsonStr === "[DONE]") {
                 continue;
               }
 
@@ -105,13 +151,12 @@ export function ContentGeneratorApp() {
                   if (parsedData.visualizations) {
                     currentVisualizations = parsedData.visualizations;
                   }
-                  // Update the last AI message
-                  setMessages(prev => {
+                  setMessages((prev) => {
                     const newMessages = [...prev];
                     newMessages[newMessages.length - 1] = {
-                      type: 'ai',
+                      type: "ai",
                       content: accumulatedContent,
-                      visualizations: currentVisualizations
+                      visualizations: currentVisualizations,
                     };
                     return newMessages;
                   });
@@ -119,7 +164,7 @@ export function ContentGeneratorApp() {
                   setError(parsedData.error);
                 }
               } catch (e) {
-                console.debug('Skipping unparseable message:', trimmedMessage);
+                console.debug("Skipping unparseable message:", trimmedMessage);
                 continue;
               }
             }
@@ -129,18 +174,19 @@ export function ContentGeneratorApp() {
         decoder.decode(undefined);
       }
     } catch (error) {
-      console.error('API error:', error);
-      setError(error instanceof Error ? error.message : 'Failed to generate content');
-      // Remove the temporary AI message if there was an error
-      setMessages(prev => prev.slice(0, -1));
+      console.error("API error:", error);
+      setError(
+        error instanceof Error ? error.message : "Failed to generate content",
+      );
+      setMessages((prev) => prev.slice(0, -1));
     } finally {
       setIsGenerating(false);
-      inputRef.current?.focus(); // Focus input after sending
+      inputRef.current?.focus();
     }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       generateContent();
     }
@@ -148,29 +194,61 @@ export function ContentGeneratorApp() {
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
-      {/* Header */}
-      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 shadow-lg">
-        <div className="max-w-3xl mx-auto">
+      <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 shadow-lg fixed top-0 left-0 right-0 z-50">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
           <h1 className="text-xl font-semibold text-white">Agent Orch 1.0</h1>
+          <div className="flex items-center">
+            <span className="text-white mr-2">Choose your agents:</span>
+            <Select>
+              <SelectTrigger className="w-48 bg-gray-700 border-gray-600 text-white">
+                <SelectValue>
+                  {`${selectedAgents.length} ${selectedAgents.length === 1 ? 'agent' : 'agents'} selected`}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="bg-gray-800 border-gray-700 min-w-[320px]">
+                <div className="py-1">
+                  {availableAgents.map((agent) => (
+                    <div
+                      key={agent.value}
+                      className="flex items-center justify-between w-full px-2 py-2 cursor-pointer hover:bg-gray-700"
+                      onClick={() => handleAgentSelection(agent.value)}
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-medium text-white">
+                          {agent.label}
+                        </span>
+                        <span className="text-sm text-gray-400">
+                          {agent.description}
+                        </span>
+                      </div>
+                      {selectedAgents.includes(agent.value) && (
+                        <Check className="w-4 h-4 text-blue-500 ml-2 flex-shrink-0" />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-hidden flex flex-col">
+      <div className="flex-1 overflow-hidden flex flex-col pt-16">
         <div className="flex-1 overflow-y-auto px-4 py-6">
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.map((message, index) => (
               <div
                 key={index}
-                className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div className="flex flex-col max-w-[80%] group">
                   <div
                     className={`
                       rounded-2xl px-4 py-2 shadow-sm
-                      ${message.type === 'user'
-                        ? 'bg-blue-500 text-white rounded-br-none'
-                        : 'bg-gray-800 text-gray-100 rounded-bl-none'
+                      ${
+                        message.type === "user"
+                          ? "bg-blue-500 text-white rounded-br-none"
+                          : "bg-gray-800 text-gray-100 rounded-bl-none"
                       }
                     `}
                   >
@@ -182,11 +260,13 @@ export function ContentGeneratorApp() {
                       <TypingIndicator />
                     )}
                   </div>
-                  {message.type === 'ai' && !message.isInitial && message.content && (
-                    <div className="mt-1 ml-2">
-                      <CopyButton text={message.content} />
-                    </div>
-                  )}
+                  {message.type === "ai" &&
+                    !message.isInitial &&
+                    message.content && (
+                      <div className="mt-1 ml-2">
+                        <CopyButton text={message.content} />
+                      </div>
+                    )}
                 </div>
               </div>
             ))}
@@ -194,7 +274,6 @@ export function ContentGeneratorApp() {
           </div>
         </div>
 
-        {/* Fixed Input Area */}
         <div className="bg-gray-800 border-t border-gray-700 px-4 py-3">
           <div className="max-w-3xl mx-auto">
             {error && (

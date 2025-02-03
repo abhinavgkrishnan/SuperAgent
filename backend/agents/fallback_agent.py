@@ -14,11 +14,13 @@ class FallbackAgent(BaseAgent):
         - User intent confirmation
         - Multi-purpose queries that could fit multiple agents
         """
-    def __init__(self):
+    def __init__(self, available_agents: List[str], selected_agents: List[str]):
         super().__init__(temperature=0.7)
         self.agent_type = 'fallback'
+        self.available_agents = available_agents
+        self.selected_agents = selected_agents
         self._register_fallback_tools()
-        logger.info("FallbackAgent initialized")
+        logger.info("FallbackAgent initialized with available and selected agents info")
 
     def _register_fallback_tools(self):
         self.register_tool(
@@ -43,13 +45,20 @@ class FallbackAgent(BaseAgent):
         )
 
     def _generate_clarification(self, topic: str, input_data: Optional[str] = None) -> str:
-        """Generate clarifying questions without standardized response wrapper"""
         try:
             context = f"Previous clarification:\n{input_data}\n" if input_data else ""
+            unavailable_agents = [agent for agent in self.available_agents if agent not in self.selected_agents]
+            agent_info = ""
+            if unavailable_agents:
+                agent_info = f"Note: The following agents are not currently selected: {', '.join(unavailable_agents)}. "
+                agent_info += "Please consider adding them if they might be relevant to your query."
+            
             messages = [
                 {
                     "role": "system",
-                    "content": """Generate clarifying questions..."""
+                    "content": f"""Generate clarifying questions and provide information about unavailable agents if relevant.
+                    {agent_info}
+                    Only mention the specific unavailable agents listed above, if any. Do not suggest or invent new agent types."""
                 },
                 {
                     "role": "user",
@@ -66,16 +75,25 @@ class FallbackAgent(BaseAgent):
 
 
     def _format_clarification_response(self, query: str, clarification: Dict[str, Any], input_data: Optional[str] = None) -> str:
-        """Format clarification response"""
         try:
+            unavailable_agents = [agent for agent in self.available_agents if agent not in self.selected_agents]
+            agent_info = ""
+            if unavailable_agents:
+                agent_info = f"The following agents are not currently selected: {', '.join(unavailable_agents)}. "
+                agent_info += "Please consider adding them if they might be relevant to your query."
+            
             messages = [
                 {
                     "role": "system",
-                    "content": """Create a helpful response that:
+                    "content": f"""Create a helpful response that:
                     1. Acknowledges the ambiguity
                     2. Presents clarifying questions
                     3. Suggests possible interpretations
-                    Use a conversational, helpful tone."""
+                    4. Mentions unavailable agents if relevant
+                    Use a conversational, helpful tone.
+                    
+                    {agent_info}
+                    Only mention the specific unavailable agents listed above, if any. Do not suggest or invent new agent types."""
                 },
                 {
                     "role": "user",

@@ -18,7 +18,9 @@ thesis_agent = ThesisAgent()
 twitter_agent = TwitterAgent()
 financial_agent = FinancialReportAgent()
 product_description_agent = ProductDescriptionAgent()
-fallback_agent = FallbackAgent()
+
+available_agents = ['thesis', 'twitter', 'financial', 'product']
+fallback_agent = FallbackAgent(available_agents=available_agents, selected_agents=[])
 
 # Initialize SuperAgent with specialized agents
 specialized_agents = {
@@ -28,7 +30,6 @@ specialized_agents = {
     'product': product_description_agent,
     'fallback': fallback_agent
 }
-super_agent = SuperAgent(search_agent=serper_agent, specialized_agents=specialized_agents)
 
 def init_routes(app):
     @app.route('/api/generate', methods=['POST'])
@@ -42,14 +43,27 @@ def init_routes(app):
                 return jsonify({'error': 'No prompt provided'}), 400
     
             prompt = data['prompt']
+            selected_agents = data.get('selectedAgents', ['thesis', 'twitter', 'financial', 'product'])
+            selected_agents.append('fallback')  # Always include fallback
             logger.info(f"Received prompt: {prompt}")
+            logger.info(f"Selected agents: {selected_agents}")
+    
+            # Filter specialized_agents based on selected_agents
+            filtered_agents = {k: v for k, v in specialized_agents.items() if k in selected_agents}
+            
+            fallback_agent.selected_agents = selected_agents
+    
+            # Create a new SuperAgent instance with filtered agents
+            current_super_agent = SuperAgent(search_agent=serper_agent, 
+                                             specialized_agents=filtered_agents, 
+                                             selected_agents=selected_agents)
     
             def generate():
                 try:
                     accumulated_content = ""
                     execution_info = {}
                     
-                    for chunk in super_agent.generate(prompt):
+                    for chunk in current_super_agent.generate(prompt):
                         try:
                             if isinstance(chunk, str):
                                 chunk_data = json.loads(chunk)
@@ -70,8 +84,8 @@ def init_routes(app):
                         content=accumulated_content,
                         content_type=execution_info.get('content_type', 'unknown'),
                         meta_info={
-                            'tools_used': super_agent.get_tools_used(),
-                            'execution_path': super_agent.get_execution_path()
+                            'tools_used': current_super_agent.get_tools_used(),
+                            'execution_path': current_super_agent.get_execution_path()
                         }
                     )
                     db.session.add(content_entry)
